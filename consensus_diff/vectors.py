@@ -6,7 +6,7 @@ runner allowlist (alphabetical), no substring filtering.
 """
 
 import collections
-import os
+import fcntl
 import re
 import shutil
 import sys
@@ -54,37 +54,43 @@ class Case:
 
 
 def ensure_archive(tag: str, preset: str) -> Path:
-    """Download+extract once; atomic tarball write (tmp + rename), size check."""
+    """Download+extract once. Concurrency-safe: an exclusive flock serializes
+    cold-cache extraction across processes (xdist workers, fuzz loop), so the
+    tarball is downloaded and extracted exactly once even under -n auto."""
     root = CACHE_ROOT / f"{tag}-{preset}"
     if (root / "tests").is_dir():
         return root
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-    tarball = CACHE_ROOT / f"{tag}-{preset}.tar.gz"
-    if not tarball.exists():
-        url = f"https://github.com/ethereum/consensus-specs/releases/download/{tag}/{preset}.tar.gz"
-        # pid-suffixed: concurrent collectors (xdist cold cache) must not truncate each other;
-        # warm the cache single-process first for full safety.
-        tmp = tarball.with_suffix(f".part{os.getpid()}")
-        print(f"  downloading {url} ...", file=sys.stderr)
-        with urllib.request.urlopen(url) as resp, open(tmp, "wb") as out:
-            shutil.copyfileobj(resp, out)
-        if tmp.stat().st_size < 1_000_000:  # both presets are far larger; catch truncation
-            tmp.unlink()
-            raise RuntimeError(f"suspiciously small download for {url}")
-        tmp.rename(tarball)
-    tmp_root = root.with_name(root.name + ".extracting")
-    if tmp_root.exists():
-        shutil.rmtree(tmp_root)
-    tmp_root.mkdir(parents=True)
-    try:
-        with tarfile.open(tarball) as tar:
-            tar.extractall(tmp_root, filter="data")
-    except tarfile.ReadError as exc:
-        tarball.unlink()
-        raise RuntimeError(
-            f"corrupt tarball removed ({tarball}); re-run to re-download"
-        ) from exc
-    tmp_root.rename(root)
+    lock_path = CACHE_ROOT / f"{tag}-{preset}.lock"
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if (root / "tests").is_dir():  # another process finished while we waited
+            return root
+        tarball = CACHE_ROOT / f"{tag}-{preset}.tar.gz"
+        if not tarball.exists():
+            url = f"https://github.com/ethereum/consensus-specs/releases/download/{tag}/{preset}.tar.gz"
+            tmp = tarball.with_suffix(".part")   # no pid suffix needed under the lock
+            print(f"  downloading {url} ...", file=sys.stderr)
+            with urllib.request.urlopen(url) as resp, open(tmp, "wb") as out:
+                shutil.copyfileobj(resp, out)
+            if tmp.stat().st_size < 1_000_000:
+                tmp.unlink()
+                raise RuntimeError(f"suspiciously small download for {url}")
+            tmp.rename(tarball)
+        stage = CACHE_ROOT / f"{tag}-{preset}.extracting"
+        if stage.exists():
+            shutil.rmtree(stage)
+        stage.mkdir(parents=True)
+        try:
+            with tarfile.open(tarball) as tar:
+                tar.extractall(stage, filter="data")
+        except tarfile.ReadError:
+            tarball.unlink()
+            raise RuntimeError(
+                f"corrupt tarball {tarball} removed; re-run to re-download") from None
+        if root.exists():           # clear a stale/empty prior attempt
+            shutil.rmtree(root)
+        stage.rename(root)
     return root
 
 
