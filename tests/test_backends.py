@@ -1,3 +1,4 @@
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -53,6 +54,7 @@ def test_garbage_line_is_drained_and_answer_awaited(tmp_path):
     c = client("garbage", tmp_path, timeout=2.0)
     v = c.submit("x\ty")
     assert v.bucket == "bug"  # only a non-protocol line arrived, then silence -> timeout -> infra
+    assert "timeout" in v.detail
     c.close()
 
 
@@ -75,3 +77,28 @@ def test_hang_times_out_to_bug(tmp_path):
 def test_bad_argv_fails_handshake(tmp_path):
     with pytest.raises(HandshakeError):
         ServerClient(spec("badargv"), fork="gloas", preset="minimal", log_dir=tmp_path)
+
+
+def test_death_once_recovers_via_respawn_and_resend(tmp_path):
+    s = spec("die-once")
+    s = dataclasses.replace(s, env={**s.env, "FAKE_DIE_ONCE_FLAG": str(tmp_path / "flag")})
+    c = ServerClient(s, fork="gloas", preset="minimal", log_dir=tmp_path)
+    v = c.submit("x\ty")
+    assert (v.status, v.bucket) == ("pass", "ok")  # died once, respawned, resent, answered
+    c.close()
+
+
+def test_close_shuts_down_cleanly(tmp_path):
+    c = client("ok", tmp_path)
+    assert c.submit("x\ty").status == "pass"
+    proc = c._proc
+    c.close()
+    assert proc.returncode == 0
+
+
+def test_load_all_names_the_broken_table(tmp_path):
+    (tmp_path / "b.toml").write_text(
+        '[backends.broken]\nforks = ["gloas"]\npresets = ["minimal"]\n'
+    )
+    with pytest.raises(ValueError, match="backends.broken"):
+        BackendSpec.load_all(tmp_path / "b.toml")

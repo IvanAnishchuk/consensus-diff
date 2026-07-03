@@ -6,6 +6,8 @@ FAKE_MODE env var picks the behavior:
   reject        -> answer 'fail\\treject\\tnope'
   noise-then-ok -> two banner lines first, then behave like ok
   die           -> exit after reading one request (before answering)
+  die-once      -> if FAKE_DIE_ONCE_FLAG path absent: create it and exit 1;
+                   if path exists: answer like ok (simulates a one-shot crash)
   garbage       -> emit a non-protocol line as the only answer, then behave like ok
   hang          -> read a request and sleep forever
   badargv       -> exit 2 immediately (unsupported fork/preset simulation)
@@ -29,6 +31,11 @@ def main() -> None:
         n += 1
         if mode == "die":
             sys.exit(1)
+        if mode == "die-once":
+            flag_path = os.environ.get("FAKE_DIE_ONCE_FLAG", "")
+            if not os.path.exists(flag_path):
+                open(flag_path, "w").close()
+                sys.exit(1)
         if mode == "hang":
             time.sleep(3600)
         if mode == "garbage" and n == 1:

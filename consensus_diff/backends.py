@@ -39,15 +39,20 @@ class BackendSpec:
         data = tomllib.loads(Path(path).read_text())
         specs = []
         for name, b in data.get("backends", {}).items():
-            specs.append(cls(
-                name=name,
-                cmd=tuple(b["cmd"]),
-                cwd=Path(b["cwd"]).expanduser() if "cwd" in b else None,
-                env=dict(b.get("env", {})),
-                forks=frozenset(b["forks"]),
-                presets=frozenset(b["presets"]),
-                timeout=float(b.get("timeout", 300.0)),
-            ))
+            try:
+                specs.append(cls(
+                    name=name,
+                    cmd=tuple(b["cmd"]),
+                    cwd=Path(b["cwd"]).expanduser() if "cwd" in b else None,
+                    env={k: str(v) for k, v in b.get("env", {}).items()},
+                    forks=frozenset(b["forks"]),
+                    presets=frozenset(b["presets"]),
+                    timeout=float(b.get("timeout", 300.0)),
+                ))
+            except KeyError as e:
+                raise ValueError(
+                    f"{path}: [backends.{name}] missing required key {e}"
+                ) from e
         if not specs:
             raise ValueError(f"{path}: no [backends.<name>] tables")
         return specs
@@ -59,14 +64,19 @@ class BackendSpec:
 
 
 class ServerClient:
-    """One warm backend process; spawn/respawn, submit with timeout."""
+    """One warm backend process; spawn/respawn, submit with timeout.
+
+    Not thread-safe: one caller per client. A closed client cannot be reused.
+    """
 
     def __init__(self, spec: BackendSpec, fork: str, preset: str, log_dir: Path) -> None:
         self.spec = spec
         self.fork = fork
         self.preset = preset
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
         self._log_path = Path(log_dir) / f"{spec.name}.stderr.log"
         self._proc: subprocess.Popen | None = None
+        self._closed = False
         self._lines: queue.Queue = queue.Queue()
         self._spawn(initial=True)
 
@@ -92,9 +102,11 @@ class ServerClient:
             target=self._read_stdout, args=(self._proc, self._lines), daemon=True
         ).start()
         if initial:
-            time.sleep(0.1)
-            code = self._proc.poll()
-            if code is not None:
+            try:
+                code = self._proc.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass  # alive after the grace window: handshake ok
+            else:
                 raise HandshakeError(
                     f"{self.spec.name}: exited {code} at startup "
                     f"(unsupported fork/preset or bad argv); stderr: {self._log_path}"
@@ -113,10 +125,15 @@ class ServerClient:
 
     def submit(self, line: str) -> Verdict:
         """One request line -> one verdict; respawn+resend at most once on death."""
+        if self._closed:
+            raise RuntimeError(f"{self.spec.name}: submit() after close()")
         for attempt in (1, 2):
             if self._proc is None or self._proc.poll() is not None:
                 self._spawn()
             try:
+                # At most one unanswered line is ever in flight and request lines are far
+                # below the 64 KiB pipe buffer, so this write cannot block; revisit if
+                # the protocol ever batches or inlines payloads.
                 self._proc.stdin.write(line + "\n")
                 self._proc.stdin.flush()
             except OSError:
@@ -153,3 +170,4 @@ class ServerClient:
             except (OSError, subprocess.TimeoutExpired):
                 self._kill()
         self._proc = None
+        self._closed = True
