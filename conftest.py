@@ -100,12 +100,14 @@ def known_ids(request):
 def agreement(diff_case: Case, servers, known_ids, tmp_path, record_property):
     request_obj = prepare(diff_case, tmp_path)
     line = request_obj.line()
-    verdicts = {name: client.submit(line) for name, client in servers.items()}
-    ag = classify(verdicts, known_ids=known_ids, case_id=diff_case.id)
+    raw = {name: client.submit(line) for name, client in servers.items()}
+    canon = {name: servers[name].spec.canonicalize(v) for name, v in raw.items()}
+    ag = classify(canon, known_ids=known_ids, case_id=diff_case.id)
     record_property("census", {
         "id": diff_case.id, "class": ag.cls, "reason": ag.reason,
-        "verdicts": {n: {"status": v.status, "bucket": v.bucket, "detail": v.detail}
-                     for n, v in verdicts.items()},
+        "verdicts": {n: {"status": raw[n].status, "bucket": raw[n].bucket,
+                         "canonical": canon[n].bucket, "detail": raw[n].detail}
+                     for n in raw},
     })
     return ag
 

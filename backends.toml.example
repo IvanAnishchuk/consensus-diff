@@ -10,6 +10,12 @@ forks = ["fulu", "gloas", "heze"]
 presets = ["minimal", "mainnet"]
 # env = { ETHCL_DISABLE_CRYPTO_CACHE = "1" }   # cache-off comparisons
 
+[backends.etheorem.buckets]
+# etheorem's pyspec_server pass-side vocabulary -> the canonical pin
+pass = "ok"
+passing = "ok"
+
+# moonglass already emits the canonical vocabulary (ok/reject/todo/bug); no [buckets] table needed.
 [backends.moonglass]
 # Preset is compile-time for moonglass: one binary per preset (staged under
 # .tmp/bin in the runner repo by the M1 smoke task).

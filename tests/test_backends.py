@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from consensus_diff.backends import BackendSpec, HandshakeError, ServerClient
+from consensus_diff.protocol import Verdict
 
 FAKE = Path(__file__).parent / "fake_backend.py"
 
@@ -102,3 +103,31 @@ def test_load_all_names_the_broken_table(tmp_path):
     )
     with pytest.raises(ValueError, match="backends.broken"):
         BackendSpec.load_all(tmp_path / "b.toml")
+
+
+def test_buckets_alias_table_parsed(tmp_path):
+    (tmp_path / "b.toml").write_text(
+        '[backends.eth]\n'
+        'cmd = ["/bin/echo"]\nforks = ["gloas"]\npresets = ["minimal"]\n'
+        '[backends.eth.buckets]\n'
+        'pass = "ok"\npassing = "ok"\n'
+    )
+    (s,) = BackendSpec.load_all(tmp_path / "b.toml")
+    assert s.buckets == {"pass": "ok", "passing": "ok"}
+
+
+def test_canonicalize_remaps_listed_bucket_only():
+    s = BackendSpec(name="eth", cmd=("/bin/echo",), cwd=None,
+                    env={}, forks=frozenset({"gloas"}), presets=frozenset({"minimal"}),
+                    buckets={"pass": "ok", "passing": "ok"})
+    assert s.canonicalize(Verdict("pass", "pass", "d")) == Verdict("pass", "ok", "d")
+    assert s.canonicalize(Verdict("pass", "passing", "")) == Verdict("pass", "ok", "")
+    # "reject" is not in the alias table — canonicalize is identity
+    assert s.canonicalize(Verdict("pass", "reject", "")) == Verdict("pass", "reject", "")
+
+
+def test_no_alias_table_is_identity():
+    s = BackendSpec(name="m", cmd=("/bin/echo",), cwd=None,
+                    env={}, forks=frozenset({"gloas"}), presets=frozenset({"minimal"}))
+    v = Verdict("pass", "ok", "x")
+    assert s.canonicalize(v) is v  # frozen, unchanged, same object

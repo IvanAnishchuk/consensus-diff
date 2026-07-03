@@ -12,7 +12,7 @@ import subprocess
 import threading
 import time
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from consensus_diff.protocol import Verdict
@@ -33,6 +33,7 @@ class BackendSpec:
     forks: frozenset[str]
     presets: frozenset[str]
     timeout: float = 300.0
+    buckets: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def load_all(cls, path: Path) -> list["BackendSpec"]:
@@ -48,6 +49,7 @@ class BackendSpec:
                     forks=frozenset(b["forks"]),
                     presets=frozenset(b["presets"]),
                     timeout=float(b.get("timeout", 300.0)),
+                    buckets=dict(b.get("buckets", {})),
                 ))
             except KeyError as e:
                 raise ValueError(
@@ -61,6 +63,14 @@ class BackendSpec:
         """Substitute {fork}/{preset} placeholders, then append the protocol positionals."""
         subst = [t.format(fork=fork, preset=preset) for t in self.cmd]
         return [*subst, fork, preset]
+
+    def canonicalize(self, verdict: Verdict) -> Verdict:
+        """Remap a raw backend bucket to the canonical vocabulary via this
+        backend's alias table (identity when unlisted). The alias table lets
+        independently-developed backends emit their own dialect while the
+        differential compares one shared vocabulary (docs/protocol.md §5)."""
+        alias = self.buckets.get(verdict.bucket)
+        return verdict if alias is None else replace(verdict, bucket=alias)
 
 
 class ServerClient:

@@ -221,7 +221,11 @@ or `fail`.
 
 Working pin — reconciled against observed backend emissions at the M1 smoke;
 unlisted buckets are normalized to `other:<string>` by the harness and never
-silently compare equal.
+silently compare equal. This is the **canonical** vocabulary; a backend MAY
+emit its own dialect and declare a raw→canonical alias table in the harness
+registry (`[backends.<name>.buckets]`), which the harness applies before
+comparison — so an unaliased, unpinned bucket still normalizes to
+`other:<bucket>` and surfaces rather than silently comparing equal.
 
 | bucket | typical verdict | semantics |
 |---|---|---|
