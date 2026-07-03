@@ -1,0 +1,19 @@
+[project]
+name = "consensus-diff"
+version = "0.1.0"
+description = "Differential conformance harness: N consensus-client backends judged over consensus-spec-tests through one wire protocol"
+requires-python = ">=3.12"
+license = "CC0-1.0 OR Apache-2.0 OR WTFPL"
+dependencies = ["cramjam>=2.8", "pyyaml>=6"]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-xdist>=3.5", "ruff>=0.4"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
