@@ -1,0 +1,18 @@
+# Copy to backends.toml and adjust paths. {fork}/{preset} placeholders are
+# substituted into cmd tokens; the protocol positionals <fork> <preset> are
+# appended after. Need >=2 backends supporting the selected fork/preset.
+
+[backends.etheorem]
+# Absolute lake path: the harness env does not carry ~/.elan/bin on PATH.
+cmd = ["/home/user/.elan/bin/lake", "exe", "pyspec_server"]
+cwd = "~/src/ethereum/etheorem/packages/EthCLSpecs"
+forks = ["fulu", "gloas", "heze"]
+presets = ["minimal", "mainnet"]
+# env = { ETHCL_DISABLE_CRYPTO_CACHE = "1" }   # cache-off comparisons
+
+[backends.moonglass]
+# Preset is compile-time for moonglass: one binary per preset (staged under
+# .tmp/bin in the runner repo by the M1 smoke task).
+cmd = ["/home/user/src/ethereum/moonglass-runner/.tmp/bin/moonglass-runner-{preset}"]
+forks = ["gloas"]
+presets = ["minimal", "mainnet"]
