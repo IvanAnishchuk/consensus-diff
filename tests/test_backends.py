@@ -10,7 +10,7 @@ from consensus_diff.protocol import Verdict
 FAKE = Path(__file__).parent / "fake_backend.py"
 
 
-def spec(mode: str, timeout: float = 5.0) -> BackendSpec:
+def spec(mode: str, timeout: float = 5.0, handshake_grace: float = 0.3) -> BackendSpec:
     return BackendSpec(
         name=f"fake-{mode}",
         cmd=(sys.executable, str(FAKE)),
@@ -19,11 +19,16 @@ def spec(mode: str, timeout: float = 5.0) -> BackendSpec:
         forks=frozenset({"gloas"}),
         presets=frozenset({"minimal"}),
         timeout=timeout,
+        handshake_grace=handshake_grace,
     )
 
 
-def client(mode: str, tmp_path: Path, timeout: float = 5.0) -> ServerClient:
-    return ServerClient(spec(mode, timeout), fork="gloas", preset="minimal", log_dir=tmp_path)
+def client(
+    mode: str, tmp_path: Path, timeout: float = 5.0, handshake_grace: float = 0.3
+) -> ServerClient:
+    return ServerClient(
+        spec(mode, timeout, handshake_grace), fork="gloas", preset="minimal", log_dir=tmp_path
+    )
 
 
 def test_load_all_parses_toml(tmp_path):
@@ -76,8 +81,12 @@ def test_hang_times_out_to_bug(tmp_path):
 
 
 def test_bad_argv_fails_handshake(tmp_path):
+    # Use a generous grace so the test is load-robust: bad backends exit essentially
+    # instantly (event-driven wait), so 2.0s is only the safety ceiling, not the cost.
     with pytest.raises(HandshakeError):
-        ServerClient(spec("badargv"), fork="gloas", preset="minimal", log_dir=tmp_path)
+        ServerClient(
+            spec("badargv", handshake_grace=2.0), fork="gloas", preset="minimal", log_dir=tmp_path
+        )
 
 
 def test_death_once_recovers_via_respawn_and_resend(tmp_path):
@@ -131,3 +140,19 @@ def test_no_alias_table_is_identity():
                     env={}, forks=frozenset({"gloas"}), presets=frozenset({"minimal"}))
     v = Verdict("pass", "ok", "x")
     assert s.canonicalize(v) is v  # frozen, unchanged, same object
+
+
+def test_slow_startup_failure_is_caught_within_grace(tmp_path):
+    # grace 2.0 must catch a backend that exits 2 only after a 0.6s delay
+    s = spec("slow-badargv", handshake_grace=2.0)
+    with pytest.raises(HandshakeError):
+        ServerClient(s, fork="gloas", preset="minimal", log_dir=tmp_path)
+
+
+def test_short_grace_would_miss_the_slow_failure(tmp_path):
+    # documents the boundary: a 0.2s grace returns before the 0.6s exit,
+    # so the slow-failing backend is (wrongly) treated as healthy — this is
+    # why the default grace is generous. No HandshakeError here.
+    s = spec("slow-badargv", handshake_grace=0.2)
+    c = ServerClient(s, fork="gloas", preset="minimal", log_dir=tmp_path)
+    c.close()

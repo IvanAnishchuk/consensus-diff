@@ -11,6 +11,9 @@ FAKE_MODE env var picks the behavior:
   garbage       -> emit a non-protocol line as the only answer, then behave like ok
   hang          -> read a request and sleep forever
   badargv       -> exit 2 immediately (unsupported fork/preset simulation)
+  slow-badargv  -> sleep 0.6s, then exit 2 (simulates a backend that does slow
+                   init before deciding it cannot handle the fork/preset; used to
+                   test that a generous handshake_grace catches delayed failures)
 """
 
 import os
@@ -21,6 +24,9 @@ import time
 def main() -> None:
     mode = os.environ.get("FAKE_MODE", "ok")
     if mode == "badargv":
+        sys.exit(2)
+    if mode == "slow-badargv":
+        time.sleep(0.6)
         sys.exit(2)
     if mode == "noise-then-ok":
         print("fake backend booting...")

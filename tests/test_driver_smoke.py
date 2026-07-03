@@ -23,6 +23,7 @@ def test_driver_end_to_end(tmp_path):
         env = {{ FAKE_MODE = "ok" }}
         forks = ["gloas"]
         presets = ["minimal"]
+        handshake_grace = 0.3
 
         [backends.alpha.buckets]
         ok = "matched"
@@ -32,6 +33,7 @@ def test_driver_end_to_end(tmp_path):
         env = {{ FAKE_MODE = "reject" }}
         forks = ["gloas"]
         presets = ["minimal"]
+        handshake_grace = 0.3
     """))
     reports = tmp_path / "reports"
     proc = subprocess.run(

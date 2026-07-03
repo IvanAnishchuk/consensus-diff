@@ -33,6 +33,7 @@ class BackendSpec:
     forks: frozenset[str]
     presets: frozenset[str]
     timeout: float = 300.0
+    handshake_grace: float = 2.0
     buckets: dict[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -49,6 +50,7 @@ class BackendSpec:
                     forks=frozenset(b["forks"]),
                     presets=frozenset(b["presets"]),
                     timeout=float(b.get("timeout", 300.0)),
+                    handshake_grace=float(b.get("handshake_grace", 2.0)),
                     buckets=dict(b.get("buckets", {})),
                 ))
             except KeyError as e:
@@ -112,13 +114,23 @@ class ServerClient:
             target=self._read_stdout, args=(self._proc, self._lines), daemon=True
         ).start()
         if initial:
+            # wait() is event-driven: it returns the instant the child exits, up to
+            # the timeout ceiling.  A bad-argv / unsupported-fork backend exits 2
+            # almost immediately (fast path), so wait() catches it quickly regardless
+            # of the grace value.  The grace is only the assume-healthy ceiling before
+            # a healthy (never-exiting) backend is declared up.  It must therefore
+            # exceed worst-case interpreter cold-start-to-exit under heavy load
+            # (hence 2.0 s default, not 0.5 s).  Per-backend so unit fakes can use a
+            # short grace (e.g. 0.3 s) and the suite stays fast.
+            grace = self.spec.handshake_grace
             try:
-                code = self._proc.wait(timeout=0.5)
+                code = self._proc.wait(timeout=grace)
             except subprocess.TimeoutExpired:
                 pass  # alive after the grace window: handshake ok
             else:
                 raise HandshakeError(
-                    f"{self.spec.name}: exited {code} at startup "
+                    f"{self.spec.name}: exited {code} at startup within the "
+                    f"{grace}s handshake window "
                     f"(unsupported fork/preset or bad argv); stderr: {self._log_path}"
                 )
 

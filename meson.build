@@ -13,11 +13,9 @@ diff_args = ['run', 'pytest', src / 'test_diff.py',
 
 run_target('diff-smoke',
   command: [uv] + diff_args + ['-q', '--fork=gloas', '--preset=minimal'])
-# Serial for now (-n 1): concurrent backend spawns across xdist workers load the
-# box enough to flake the handshake-grace check; single-worker sidesteps it (and
-# makes the archive-cache flock belt-and-suspenders). Revisit once the handshake
-# is made load-robust.
+# -n 2 is Ivan's authorized default for this box (thermal limit); NEVER -n auto.
+# Drop to -n 1 when the box is busy with other work.
 run_target('diff-full-minimal',
-  command: [uv] + diff_args + ['--fork=gloas', '--preset=minimal', '--subset=0', '-n', '1', '-q'])
+  command: [uv] + diff_args + ['--fork=gloas', '--preset=minimal', '--subset=0', '-n', '2', '-q'])
 run_target('diff-full-mainnet',
-  command: [uv] + diff_args + ['--fork=gloas', '--preset=mainnet', '--subset=0', '-n', '1', '-q'])
+  command: [uv] + diff_args + ['--fork=gloas', '--preset=mainnet', '--subset=0', '-n', '2', '-q'])
