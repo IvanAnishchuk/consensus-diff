@@ -67,7 +67,7 @@ Used by the nine runners listed above.
 | 3 | pre-state path | absolute path to decompressed `pre.ssz`; **`-`** if absent |
 | 4 | post-state path | absolute path to decompressed `post.ssz`; **`-`** if absent (invalid vector) |
 | 5 | bls_setting | integer as string; default `1` when absent from `meta.yaml` |
-| 6 | blocks_count | integer as string; count of `blocks_*` files in the case directory |
+| 6 | blocks_count | integer as string, from the case's `meta.yaml` `blocks_count` key; default = count of `blocks_*` files in the case directory when the key is absent |
 | 7 | fork_epoch | integer as string; **`-`** if absent from `meta.yaml` |
 | 8 | inputs | comma-joined absolute paths of assembled input files (see below); **empty string** (not `-`) when there are no input files |
 | 9 | fork_block | integer as string; **`-`** if absent from `meta.yaml` |
@@ -157,6 +157,12 @@ Non-`checks` step entries each produce **one line**:
 | `time` | `time <int>` |
 | `genesis_time` | `genesis_time <int>` |
 | unknown top-level key, or unrecognized sub-key of a known nested check | `unsupported <names>` — unknown top-level keys plus `parent.subkey` forms for unmodeled sub-keys of known nested checks, all sorted and joined with `/` |
+
+The known sub-key sets that gate the fallback are: `head` — `root`, `slot`,
+`payload_status`; `payload_timeliness_vote` and `payload_data_availability_vote`
+— `block_root`, `votes`; `justified_checkpoint` and `finalized_checkpoint` —
+`epoch`, `root`. Any other sub-key of these checks emits the `parent.subkey`
+form above.
 
 **Design intent:** any unmodeled key or sub-key MUST surface as an explicit
 `unsupported` line so the case reports a visible coverage gap rather than
