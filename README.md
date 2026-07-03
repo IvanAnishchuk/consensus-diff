@@ -27,4 +27,4 @@ I hold no patents and do not intend to acquire any. — Ivan Anishchuk
 
 ## Status
 
-Pre-M1, private.
+M1 complete — dual-server differential runs the full gloas suite both presets; private.

@@ -1,4 +1,4 @@
-# Triaged differential findings: xfail, tracked, loudly xpass when fixed.
+# Triaged differential findings: xfail, tracked, loudly FAILS when fixed (stale entry — the backends now agree).
 # [[known]]
 # id = "minimal/gloas/operations/attestation/pyspec_tests/some_case"
 # reason = "moonglass #NN — short description"

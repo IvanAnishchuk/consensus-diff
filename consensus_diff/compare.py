@@ -15,7 +15,9 @@ share the same (status, bucket_class) pair to agree; anything else is DISAGREE
 
 ``known_ids`` only reclassifies *actual disagreements* — a case that happens to
 appear in the known set but whose backends actually agree stays AGREE_PASS /
-AGREE_FAIL, surfacing it as an xpass at the driver level.
+AGREE_FAIL; a fixed divergence surfaces as a driver-level failure (test_diff.py
+fails the case with a "stale known-divergences entry" message) so stale entries
+can't rot.
 """
 
 from dataclasses import dataclass
