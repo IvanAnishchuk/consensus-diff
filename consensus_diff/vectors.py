@@ -56,7 +56,10 @@ class Case:
 def ensure_archive(tag: str, preset: str) -> Path:
     """Download+extract once. Concurrency-safe: an exclusive flock serializes
     cold-cache extraction across processes (xdist workers, fuzz loop), so the
-    tarball is downloaded and extracted exactly once even under -n auto."""
+    tarball is downloaded and extracted exactly once even under -n auto.
+
+    The lock assumes a local cache dir (the default ``~/.cache``); flock
+    semantics are unreliable if ``CACHE_ROOT`` is pointed at NFS."""
     root = CACHE_ROOT / f"{tag}-{preset}"
     if (root / "tests").is_dir():
         return root
