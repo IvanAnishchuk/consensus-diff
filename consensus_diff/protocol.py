@@ -7,6 +7,7 @@ etheorem's LGPL sources). Three request shapes; one response shape.
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, Self
 
 ABSENT = "-"
 
@@ -15,6 +16,12 @@ ABSENT = "-"
 #: can never silently compare equal.
 BUCKETS = frozenset({"ok", "mismatch", "reject", "accept-invalid", "reject-valid",
                      "todo", "skip", "bug", "?"})
+
+#: The nine runners sharing the 10-field line — docs/protocol.md §3.1
+GENERIC_RUNNERS = frozenset({
+    "sanity", "finality", "random", "epoch_processing", "operations",
+    "rewards", "genesis", "fork", "transition",
+})
 
 
 def _opt_path(p: Path | None) -> str:
@@ -40,7 +47,12 @@ class GenericRequest:
     fork_block: int | None = None
     execution_valid: bool = True
 
+    def __post_init__(self) -> None:
+        if self.runner not in GENERIC_RUNNERS:
+            raise ValueError(f"not a generic-shape runner: {self.runner}")
+
     def line(self) -> str:
+        """Returns the line WITHOUT the trailing newline; the transport appends it."""
         return "\t".join([
             self.runner,
             self.handler,
@@ -65,6 +77,7 @@ class ForkChoiceRequest:
     script: Path
 
     def line(self) -> str:
+        """Returns the line WITHOUT the trailing newline; the transport appends it."""
         return "\t".join([
             "fork_choice", self.handler, str(self.anchor_state),
             ABSENT, "1", "0", ABSENT,
@@ -74,26 +87,39 @@ class ForkChoiceRequest:
 
 @dataclass(frozen=True)
 class SszStaticRequest:
-    """The 4-field ssz_static line: container name, bytes, expected root."""
+    """The 4-field ssz_static line: container name, path to serialized bytes, expected root."""
 
     handler: str
     serialized: Path
     root: str
 
     def line(self) -> str:
+        """Returns the line WITHOUT the trailing newline; the transport appends it."""
         return "\t".join(["ssz_static", self.handler, str(self.serialized), self.root])
 
 
 @dataclass(frozen=True)
 class Verdict:
-    status: str  # "pass" | "fail"
+    """One parsed response line.
+
+    ``status`` is the raw verdict token; per docs/protocol.md §4 bucket
+    ``bug`` outranks a ``pass`` status — score through compare, never by
+    testing ``status`` alone.
+    """
+
+    status: Literal["pass", "fail"]
     bucket: str
     detail: str
 
     @classmethod
-    def try_parse(cls, line: str) -> "Verdict | None":
-        """Parse one response line; None for permitted non-protocol noise."""
-        fields = line.rstrip("\r\n").split("\t")
+    def try_parse(cls, line: str) -> Self | None:
+        """Parse one response line; None for permitted non-protocol noise.
+
+        Uses split("\\t", 2) so a tab-carrying detail is preserved instead of
+        truncated; detail keeps any embedded tabs (evidence preservation; the
+        spec forbids them, so their presence is itself diagnostic).
+        """
+        fields = line.rstrip("\r\n").split("\t", 2)
         if fields[0] not in ("pass", "fail"):
             return None
         bucket = fields[1] if len(fields) > 1 and fields[1] else "?"
@@ -102,4 +128,5 @@ class Verdict:
 
     @property
     def bucket_class(self) -> str:
+        """The comparison class: a pinned bucket verbatim, anything else ``other:<bucket>``."""
         return self.bucket if self.bucket in BUCKETS else f"other:{self.bucket}"

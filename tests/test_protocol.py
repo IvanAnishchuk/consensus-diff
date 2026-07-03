@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from consensus_diff.protocol import (
     ForkChoiceRequest,
     GenericRequest,
@@ -15,7 +17,10 @@ def test_generic_line_all_fields_present():
         bls_setting=1, blocks_count=0, fork_epoch=None,
         inputs=(Path("/t/attestation.ssz"),), fork_block=None, execution_valid=True,
     )
-    assert r.line() == "operations\tattestation\t/t/pre.ssz\t/t/post.ssz\t1\t0\t-\t/t/attestation.ssz\t-\t1"
+    assert r.line() == (
+        "operations\tattestation\t/t/pre.ssz\t/t/post.ssz\t1\t0\t-\t"
+        "/t/attestation.ssz\t-\t1"
+    )
 
 
 def test_generic_line_absent_markers_and_empty_inputs():
@@ -34,7 +39,10 @@ def test_fork_choice_line_fixed_placeholders():
         handler="get_head", anchor_state=Path("/t/anchor_state.ssz"),
         anchor_block=Path("/t/anchor_block.ssz"), script=Path("/t/fc_script.txt"),
     )
-    assert r.line() == "fork_choice\tget_head\t/t/anchor_state.ssz\t-\t1\t0\t-\t/t/anchor_block.ssz,/t/fc_script.txt"
+    assert r.line() == (
+        "fork_choice\tget_head\t/t/anchor_state.ssz\t-\t1\t0\t-\t"
+        "/t/anchor_block.ssz,/t/fc_script.txt"
+    )
 
 
 def test_ssz_static_line():
@@ -57,3 +65,32 @@ def test_verdict_parse_defaults_and_noise():
 def test_verdict_bucket_class_normalization():
     assert Verdict("fail", "mismatch", "").bucket_class == "mismatch"
     assert Verdict("pass", "weird-server-string", "").bucket_class == "other:weird-server-string"
+
+
+def test_generic_line_joins_multiple_inputs_with_commas():
+    r = GenericRequest(
+        runner="rewards", handler="basic",
+        pre=Path("/t/pre.ssz"), post=None,
+        inputs=(Path("/t/a.ssz"), Path("/t/b.ssz"), Path("/t/c.ssz")),
+    )
+    assert r.line().split("\t")[7] == "/t/a.ssz,/t/b.ssz,/t/c.ssz"
+
+
+def test_generic_defaults_apply():
+    r = GenericRequest(runner="sanity", handler="slots", pre=None, post=None)
+    assert r.line() == "sanity\tslots\t-\t-\t1\t0\t-\t\t-\t1"
+
+
+def test_generic_rejects_non_generic_runner():
+    with pytest.raises(ValueError, match="fork_choice"):
+        GenericRequest(runner="fork_choice", handler="x", pre=None, post=None)
+
+
+def test_verdict_parse_preserves_tabs_in_detail():
+    v = Verdict.try_parse("fail\tbug\tdetail\twith\ttabs")
+    assert v.detail == "detail\twith\ttabs"
+
+
+def test_verdict_parse_empty_and_crlf():
+    assert Verdict.try_parse("") is None
+    assert Verdict.try_parse("pass\tok\tfine\r\n").detail == "fine"
