@@ -2,14 +2,14 @@
 
 Pure: verdicts in, agreement class out.
 
-Precedence for mixed special classes (infra > uncovered > skipped):
-- Any backend with bucket ``bug``  → INFRA   (infrastructure noise; not a real
+Precedence for mixed special bucket classes (infra > uncovered > skipped):
+- Any backend with bucket class ``bug``  → INFRA   (infrastructure noise; not a real
   protocol disagreement and not a coverage gap — the run was corrupt).
-- Any backend with bucket ``todo`` → UNCOVERED (at least one backend hasn't
+- Any backend with bucket class ``todo`` → UNCOVERED (at least one backend hasn't
   implemented the case yet; no meaningful comparison is possible).
-- Any backend with bucket ``skip`` → SKIPPED  (out of scope for at least one
+- Any backend with bucket class ``skip`` → SKIPPED  (out of scope for at least one
   backend; suppress from the diff table).
-After the three special classes are drained the remaining outcomes must all
+After the three special bucket classes are drained the remaining outcomes must all
 share the same (status, bucket_class) pair to agree; anything else is DISAGREE
 (or KNOWN, when the case_id is listed in the known-divergence set).
 
@@ -19,25 +19,37 @@ AGREE_FAIL, surfacing it as an xpass at the driver level.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
 from consensus_diff.protocol import Verdict
 
-AGREE_PASS = "agree-pass"
-AGREE_FAIL = "agree-fail"
-UNCOVERED = "uncovered"
-SKIPPED = "skipped"
-INFRA = "infra"
-DISAGREE = "disagree"
-KNOWN = "known"
+AgreementClass = Literal[
+    "agree-pass", "agree-fail", "uncovered", "skipped", "infra", "disagree", "known"
+]
+
+AGREE_PASS: AgreementClass = "agree-pass"
+AGREE_FAIL: AgreementClass = "agree-fail"
+UNCOVERED: AgreementClass = "uncovered"
+SKIPPED: AgreementClass = "skipped"
+INFRA: AgreementClass = "infra"
+DISAGREE: AgreementClass = "disagree"
+KNOWN: AgreementClass = "known"
 
 
 @dataclass(frozen=True)
 class Agreement:
-    cls: str
+    """One classified comparison result.
+
+    ``cls`` is one of the seven AgreementClass values.
+    ``reason`` is human-readable evidence for census records and failure messages —
+    never machine-parsed.
+    """
+
+    cls: AgreementClass
     reason: str
 
 
-def _named(verdicts: dict[str, Verdict], bucket_class: str) -> list[str]:
+def _backends_with(verdicts: dict[str, Verdict], bucket_class: str) -> list[str]:
     """Return sorted backend names whose verdict carries the given bucket_class."""
     return sorted(n for n, v in verdicts.items() if v.bucket_class == bucket_class)
 
@@ -57,16 +69,17 @@ def classify(
 ) -> Agreement:
     """Classify N backend verdicts into a single Agreement.
 
-    Precedence (highest first): infra > uncovered > skipped > disagree/known >
-    agree-fail > agree-pass.  ``known_ids`` only promotes genuine DISAGREE to
-    KNOWN — an agreement on a known-divergence id stays AGREE_PASS/AGREE_FAIL
-    so a fixed divergence surfaces as xpass automatically.
+    See module docstring for the full precedence story and the known-ids xpass
+    subtlety.  A single-backend dict yields a vacuous agreement, deliberately
+    (bring-up mode); an EMPTY dict is a driver bug and raises ValueError.
     """
-    if bugs := _named(verdicts, "bug"):
+    if not verdicts:
+        raise ValueError("classify() needs at least one verdict (driver bug)")
+    if bugs := _backends_with(verdicts, "bug"):
         return Agreement(INFRA, f"bug on {', '.join(bugs)}: {_render(verdicts)}")
-    if todos := _named(verdicts, "todo"):
+    if todos := _backends_with(verdicts, "todo"):
         return Agreement(UNCOVERED, f"todo on {', '.join(todos)}: {_render(verdicts)}")
-    if skips := _named(verdicts, "skip"):
+    if skips := _backends_with(verdicts, "skip"):
         return Agreement(SKIPPED, f"skip on {', '.join(skips)}: {_render(verdicts)}")
 
     outcomes = {(v.status, v.bucket_class) for v in verdicts.values()}
