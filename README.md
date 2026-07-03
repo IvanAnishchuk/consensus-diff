@@ -7,9 +7,21 @@ A differential conformance harness for Ethereum consensus clients. It drives N (
 ```sh
 uv sync
 meson setup build
-meson test -C build --suite unit
-ninja -C build diff-smoke
+meson test -C build --suite unit        # the harness's own tests — no backends needed
 ```
+
+The differential sweeps need ≥2 backends. Build each one, then copy the
+registry template and point it at your binaries:
+
+```sh
+cp backends.toml.example backends.toml   # backends.toml is gitignored (machine-specific paths)
+# edit backends.toml — see the comments in the .example
+ninja -C build diff-smoke                # gloas/minimal dev subset
+```
+
+The first sweep downloads and caches the consensus-spec-tests archive under
+`~/.cache/consensus-diff/`. Full sweeps: `ninja -C build diff-full-minimal`
+(and `diff-full-mainnet`); both run `-n 2` by default.
 
 ## License
 

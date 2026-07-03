@@ -1,6 +1,8 @@
-# Copy to backends.toml and adjust paths. {fork}/{preset} placeholders are
+# Copy to backends.toml (gitignored — this .example is the tracked template)
+# and adjust the paths to your machine. {fork}/{preset} placeholders are
 # substituted into cmd tokens; the protocol positionals <fork> <preset> are
 # appended after. Need >=2 backends supporting the selected fork/preset.
+# Build each backend first — the harness only drives them, it doesn't build them.
 
 [backends.etheorem]
 # Absolute lake path: the harness env does not carry ~/.elan/bin on PATH.
@@ -9,6 +11,9 @@ cwd = "~/src/ethereum/etheorem/packages/EthCLSpecs"
 forks = ["fulu", "gloas", "heze"]
 presets = ["minimal", "mainnet"]
 # env = { ETHCL_DISABLE_CRYPTO_CACHE = "1" }   # cache-off comparisons
+# handshake_grace = 2.0   # seconds to wait for a bad backend to exit at startup
+#                         # before assuming it healthy (default 2.0; raise for a
+#                         # slow-starting backend on a loaded box)
 
 [backends.etheorem.buckets]
 # etheorem's pyspec_server pass-side vocabulary -> the canonical pin
@@ -17,8 +22,9 @@ passing = "ok"
 
 # moonglass already emits the canonical vocabulary (ok/reject/todo/bug); no [buckets] table needed.
 [backends.moonglass]
-# Preset is compile-time for moonglass: one binary per preset (staged under
-# .tmp/bin in the runner repo by the M1 smoke task).
-cmd = ["/home/user/src/ethereum/moonglass-runner/.tmp/bin/moonglass-runner-{preset}"]
+# Preset is compile-time for moonglass: cargo builds one binary per preset
+# (`moonglass-runner-{minimal,mainnet}` via the runner's per-preset [[bin]]
+# targets), so the {preset} placeholder selects the matching build.
+cmd = ["/home/user/src/ethereum/moonglass-runner/target/release/moonglass-runner-{preset}"]
 forks = ["gloas"]
 presets = ["minimal", "mainnet"]
