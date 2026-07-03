@@ -1,0 +1,77 @@
+import sys
+from pathlib import Path
+
+import pytest
+
+from consensus_diff.backends import BackendSpec, HandshakeError, ServerClient
+
+FAKE = Path(__file__).parent / "fake_backend.py"
+
+
+def spec(mode: str, timeout: float = 5.0) -> BackendSpec:
+    return BackendSpec(
+        name=f"fake-{mode}",
+        cmd=(sys.executable, str(FAKE)),
+        cwd=None,
+        env={"FAKE_MODE": mode},
+        forks=frozenset({"gloas"}),
+        presets=frozenset({"minimal"}),
+        timeout=timeout,
+    )
+
+
+def client(mode: str, tmp_path: Path, timeout: float = 5.0) -> ServerClient:
+    return ServerClient(spec(mode, timeout), fork="gloas", preset="minimal", log_dir=tmp_path)
+
+
+def test_load_all_parses_toml(tmp_path):
+    (tmp_path / "backends.toml").write_text(
+        '[backends.demo]\n'
+        'cmd = ["/bin/echo", "{preset}"]\n'
+        'forks = ["gloas"]\npresets = ["minimal", "mainnet"]\ntimeout = 12.5\n'
+        'env = { X = "1" }\n'
+    )
+    (s,) = BackendSpec.load_all(tmp_path / "backends.toml")
+    assert s.name == "demo" and s.timeout == 12.5 and s.env == {"X": "1"}
+    assert s.argv("gloas", "mainnet") == ["/bin/echo", "mainnet", "gloas", "mainnet"]
+
+
+def test_submit_round_trip(tmp_path):
+    c = client("ok", tmp_path)
+    v = c.submit("operations\tattestation\t-\t-\t1\t0\t-\t\t-\t1")
+    assert (v.status, v.bucket) == ("pass", "ok")
+    c.close()
+
+
+def test_noise_lines_are_drained(tmp_path):
+    c = client("noise-then-ok", tmp_path)
+    assert c.submit("x\ty").status == "pass"
+    c.close()
+
+
+def test_garbage_line_is_drained_and_answer_awaited(tmp_path):
+    c = client("garbage", tmp_path, timeout=2.0)
+    v = c.submit("x\ty")
+    assert v.bucket == "bug"  # only a non-protocol line arrived, then silence -> timeout -> infra
+    c.close()
+
+
+def test_death_respawns_once_then_synthesizes_bug(tmp_path):
+    c = client("die", tmp_path)
+    v = c.submit("x\ty")
+    assert (v.status, v.bucket) == ("fail", "bug")
+    assert "died" in v.detail
+    c.close()
+
+
+def test_hang_times_out_to_bug(tmp_path):
+    c = client("hang", tmp_path, timeout=1.0)
+    v = c.submit("x\ty")
+    assert v.bucket == "bug"
+    assert "timeout" in v.detail
+    c.close()
+
+
+def test_bad_argv_fails_handshake(tmp_path):
+    with pytest.raises(HandshakeError):
+        ServerClient(spec("badargv"), fork="gloas", preset="minimal", log_dir=tmp_path)
