@@ -1,0 +1,5 @@
+# Triaged differential findings: xfail, tracked, loudly xpass when fixed.
+# [[known]]
+# id = "minimal/gloas/operations/attestation/pyspec_tests/some_case"
+# reason = "moonglass #NN — short description"
+# link = "https://github.com/brech1/moonglass/issues/NN"

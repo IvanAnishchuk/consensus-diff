@@ -14,7 +14,7 @@ CLASS_ORDER = ("agree-pass", "agree-fail", "uncovered", "skipped", "known", "dis
 
 def write_census(records: list[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump_all(records, f, sort_keys=False)
 
 

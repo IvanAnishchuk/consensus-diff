@@ -1,6 +1,9 @@
+from typing import get_args
+
 import yaml
 
-from consensus_diff.report import render_summary, write_census
+from consensus_diff.compare import AgreementClass
+from consensus_diff.report import CLASS_ORDER, render_summary, write_census
 
 
 def records():
@@ -33,6 +36,10 @@ def test_census_round_trips_hostile_reason(tmp_path):
     write_census(hostile, out)
     (doc,) = yaml.safe_load_all(out.read_text())
     assert doc["reason"] == "tab\there; (parens) --- and: colon"
+
+
+def test_class_order_covers_the_agreement_vocabulary():
+    assert set(CLASS_ORDER) == set(get_args(AgreementClass))
 
 
 def test_summary_counts_and_sections():

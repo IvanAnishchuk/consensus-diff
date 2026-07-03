@@ -6,6 +6,7 @@ runner allowlist (alphabetical), no substring filtering.
 """
 
 import collections
+import os
 import re
 import shutil
 import sys
@@ -61,7 +62,9 @@ def ensure_archive(tag: str, preset: str) -> Path:
     tarball = CACHE_ROOT / f"{tag}-{preset}.tar.gz"
     if not tarball.exists():
         url = f"https://github.com/ethereum/consensus-specs/releases/download/{tag}/{preset}.tar.gz"
-        tmp = tarball.with_suffix(".part")
+        # pid-suffixed: concurrent collectors (xdist cold cache) must not truncate each other;
+        # warm the cache single-process first for full safety.
+        tmp = tarball.with_suffix(f".part{os.getpid()}")
         print(f"  downloading {url} ...", file=sys.stderr)
         with urllib.request.urlopen(url) as resp, open(tmp, "wb") as out:
             shutil.copyfileobj(resp, out)

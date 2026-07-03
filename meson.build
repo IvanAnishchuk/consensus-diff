@@ -7,8 +7,8 @@ test('unit', uv,
   suite: 'unit', timeout: 300, workdir: meson.project_source_root())
 
 run_target('diff-smoke',
-  command: [uv, 'run', 'pytest', '.', '-q', '--fork=gloas', '--preset=minimal'])
+  command: [uv, 'run', 'pytest', 'test_diff.py', '-q', '--fork=gloas', '--preset=minimal'])
 run_target('diff-full-minimal',
-  command: [uv, 'run', 'pytest', '.', '--fork=gloas', '--preset=minimal', '--subset=0', '-n', 'auto', '-q'])
+  command: [uv, 'run', 'pytest', 'test_diff.py', '--fork=gloas', '--preset=minimal', '--subset=0', '-n', 'auto', '-q'])
 run_target('diff-full-mainnet',
-  command: [uv, 'run', 'pytest', '.', '--fork=gloas', '--preset=mainnet', '--subset=0', '-n', '4', '-q'])
+  command: [uv, 'run', 'pytest', 'test_diff.py', '--fork=gloas', '--preset=mainnet', '--subset=0', '-n', '4', '-q'])
