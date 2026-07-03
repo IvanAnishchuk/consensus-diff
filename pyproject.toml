@@ -18,3 +18,5 @@ extend-select = ["I", "E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1

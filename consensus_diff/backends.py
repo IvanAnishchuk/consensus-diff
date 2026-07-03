@@ -36,7 +36,7 @@ class BackendSpec:
 
     @classmethod
     def load_all(cls, path: Path) -> list["BackendSpec"]:
-        data = tomllib.loads(Path(path).read_text())
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
         specs = []
         for name, b in data.get("backends", {}).items():
             try:

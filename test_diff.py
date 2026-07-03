@@ -13,7 +13,7 @@ from consensus_diff.compare import (
 )
 
 
-def test_case(diff_case, agreement):
+def test_case(diff_case, agreement, known_ids):
     ag = agreement
     if ag.cls == INFRA:
         pytest.fail(f"{diff_case.id}: infra — {ag.reason}")
@@ -27,3 +27,8 @@ def test_case(diff_case, agreement):
         pytest.fail(f"{diff_case.id}: DISAGREEMENT — {ag.reason}")
     else:
         assert ag.cls in (AGREE_PASS, AGREE_FAIL)
+        if diff_case.id in known_ids:
+            pytest.fail(
+                f"{diff_case.id}: stale known-divergences entry — the backends now agree; "
+                "remove it so the fix stays visible"
+            )

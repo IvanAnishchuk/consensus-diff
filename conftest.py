@@ -39,8 +39,11 @@ def pytest_addoption(parser):
 
 def _selected_specs(config) -> list[BackendSpec]:
     fork, preset = config.getoption("--fork"), config.getoption("--preset")
-    specs = [s for s in BackendSpec.load_all(Path(config.getoption("--backends")))
-             if fork in s.forks and preset in s.presets]
+    try:
+        specs = [s for s in BackendSpec.load_all(Path(config.getoption("--backends")))
+                 if fork in s.forks and preset in s.presets]
+    except (FileNotFoundError, ValueError) as e:
+        raise pytest.UsageError(str(e)) from e
     if len(specs) < 2:
         raise pytest.UsageError(
             f"need >=2 backends supporting fork={fork} preset={preset}, got "
@@ -52,11 +55,15 @@ def pytest_generate_tests(metafunc):
     if "diff_case" not in metafunc.fixturenames:
         return
     config = metafunc.config
+    _selected_specs(config)  # raises UsageError at collection if <2 backends or registry broken
+    fork = config.getoption("--fork")
+    preset = config.getoption("--preset")
     root = config.getoption("--vector-root")
-    root = Path(root) if root else ensure_archive(config.getoption("--tag"),
-                                                  config.getoption("--preset"))
-    cases = list(walk_cases(root, config.getoption("--preset"), config.getoption("--fork"),
-                            subset=config.getoption("--subset")))
+    root = Path(root) if root else ensure_archive(config.getoption("--tag"), preset)
+    cases = list(walk_cases(root, preset, fork, subset=config.getoption("--subset")))
+    if not cases:
+        raise pytest.UsageError(
+            f"no cases found under {root} for {preset}/{fork} — wrong --vector-root or fork?")
     metafunc.parametrize("diff_case", cases, ids=[c.id for c in cases])
 
 
@@ -81,11 +88,11 @@ def servers(request):
 
 
 @pytest.fixture(scope="session")
-def known_ids():
-    p = Path("known-divergences.toml")
+def known_ids(request):
+    p = Path(request.config.rootpath) / "known-divergences.toml"
     if not p.exists():
         return frozenset()
-    data = tomllib.loads(p.read_text())
+    data = tomllib.loads(p.read_text(encoding="utf-8"))
     return frozenset(e["id"] for e in data.get("known", []))
 
 
@@ -119,7 +126,7 @@ def pytest_sessionfinish(session):
         return
     records = sorted(_census_records, key=lambda r: r["id"])
     fork, preset = config.getoption("--fork"), config.getoption("--preset")
-    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%S%fZ")
     outdir = Path(config.getoption("--report-dir"))
     write_census(records, outdir / f"{stamp}-{fork}-{preset}.yaml")
     (outdir / f"{stamp}-{fork}-{preset}-summary.md").write_text(
