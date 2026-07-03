@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import cramjam
+import pytest
 import yaml
 
 from consensus_diff.protocol import ForkChoiceRequest, GenericRequest, SszStaticRequest
@@ -136,3 +137,41 @@ def test_fc_vote_checks_encode_tfn():
         resolve=lambda stem: Path(f"/w/{stem}.ssz"),
     )
     assert lines == "payload_timeliness_vote 0xr t,f,n"
+
+
+def test_fc_checkpoint_renames_and_unknown_subkeys():
+    lines = build_fc_script(
+        [{"checks": {
+            "justified_checkpoint": {"epoch": 3, "root": "0xj", "surprise": 1},
+            "finalized_checkpoint": {"epoch": 2, "root": "0xf"},
+        }}],
+        resolve=lambda stem: Path(f"/w/{stem}.ssz"),
+    ).split("\n")
+    assert "justified 3 0xj" in lines and "finalized 2 0xf" in lines
+    assert lines[-1] == "unsupported justified_checkpoint.surprise"
+
+
+def test_fc_should_override_and_unknown_check_key():
+    lines = build_fc_script(
+        [{"checks": {"should_override_forkchoice_update": True, "wat": 1}}],
+        resolve=lambda stem: Path(f"/w/{stem}.ssz"),
+    ).split("\n")
+    assert "unsupported should_override_forkchoice_update" in lines
+    assert lines[-1] == "unsupported wat"
+
+
+def test_fc_block_columns_join_and_default_dash():
+    lines = build_fc_script(
+        [{"block": "b1", "columns": ["c1", "c2"]}, {"block": "b2"}],
+        resolve=lambda stem: Path(f"/w/{stem}.ssz"),
+    ).split("\n")
+    assert lines[0] == "block /w/b1.ssz 1 /w/c1.ssz,/w/c2.ssz"
+    assert lines[1] == "block /w/b2.ssz 1 -"
+
+
+def test_fork_choice_missing_steps_is_loud(tmp_path):
+    c = case(tmp_path, "fork_choice", "get_head", name="nosteps")
+    put_snappy(c.path, "anchor_state", b"AS")
+    put_snappy(c.path, "anchor_block", b"AB")
+    with pytest.raises(FileNotFoundError, match="nosteps"):
+        prepare(c, tmp_path / "w")

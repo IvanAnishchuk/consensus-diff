@@ -118,6 +118,8 @@ def walk_cases(
 
 # --- request building (docs/protocol.md §3) ---
 
+# Digits-only by design: a non-numeric blocks_* stem is corpus corruption we'd rather
+# exclude loudly (count mismatch) than guess an order for.
 _BLOCKS_RE = re.compile(r"^blocks_(\d+)$")
 
 _REWARDS_ORDER = ("source_deltas", "target_deltas", "head_deltas", "inactivity_penalty_deltas")
@@ -195,6 +197,8 @@ def build_fc_script(steps: list, resolve) -> str:
     the case lands in the todo bucket with an accurate reason, never a
     silent drop (docs/protocol.md §3.2).
     """
+    # Script lines are space-delimited with embedded paths: protocol.md §3.2 requires
+    # whitespace-free paths, which holds for our workdir/tmp layout.
     out: list[str] = []
     for step in steps:
         if "tick" in step:
@@ -243,7 +247,9 @@ def prepare(case: Case, workdir: Path):
     if case.runner == "fork_choice":
         anchor_state = _decompress(case, "anchor_state", workdir)
         anchor_block = _decompress(case, "anchor_block", workdir)
-        steps = _load_yaml(case, "steps.yaml") or []
+        steps = _load_yaml(case, "steps.yaml")
+        if steps is None:
+            raise FileNotFoundError(f"{case.id}: fork_choice case without steps.yaml")
         done: dict[str, Path] = {}
 
         def resolve(stem: str) -> Path:
