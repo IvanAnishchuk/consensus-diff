@@ -18,6 +18,9 @@ FAKE_MODE env var picks the behavior:
                      fail\taccept-invalid\tboundary  when FAKE_ACCEPTS set.
                      Two instances (one with FAKE_ACCEPTS) disagree on every
                      request, synthesizing a validity-boundary divergence.
+  bug           -> answer 'fail\\tbug\\tboom' to every request (a synthetic
+                   crash/infra bucket; paired with an `ok` instance it is a
+                   one-sided crash).
 """
 
 import os
@@ -59,7 +62,9 @@ def main() -> None:
                 print("pass\treject\tboundary")
             sys.stdout.flush()
             continue
-        if mode == "reject":
+        if mode == "bug":
+            print("fail\tbug\tboom")
+        elif mode == "reject":
             print("fail\treject\tnope")
         else:
             print(f"pass\tok\t{n}")

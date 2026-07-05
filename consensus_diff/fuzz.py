@@ -32,7 +32,9 @@ class Finding:
     verdicts: dict[str, Verdict]
     seed_id: str
     rng_seed: int
+    iteration: int
     mutation: str
+    kind: str  # "disagree" (validity boundary) | "crash" (one-sided bug bucket)
 
 
 @dataclass(frozen=True)
@@ -64,16 +66,32 @@ def signature(f: Finding) -> tuple:
     return (runner, handler, shape)
 
 
-def render_fuzz_report(findings: list[Finding], fork: str, preset: str) -> str:
+def render_fuzz_report(findings: list[Finding], fork: str, preset: str,
+                       tally: Counter | None = None) -> str:
+    """Markdown report: the per-class tally (the denominator — how many mutated
+    requests were classified into what) followed by the deduplicated findings
+    grouped by kind (disagree / crash)."""
+    tally = tally if tally is not None else Counter()
     lines = [f"# consensus-diff fuzz findings — {fork} {preset}", "",
+             f"- iterations classified: {sum(tally.values())}",
              f"- distinct findings: {len(findings)}", ""]
-    for f in sorted(findings, key=signature):
-        _p, _f, runner, handler, *_ = f.case_id.split("/")
-        shape = "; ".join(f"{n}={v.status}/{v.bucket_class}"
-                          for n, v in sorted(f.verdicts.items()))
-        lines += [f"## {runner}/{handler}",
-                  f"- seed: `{f.seed_id}`  rng_seed={f.rng_seed}  mutation={f.mutation}",
-                  f"- verdicts: {shape}", ""]
+    if tally:
+        lines.append("## tally")
+        lines += [f"- {cls}: {count}" for cls, count in sorted(tally.items())]
+        lines.append("")
+    for kind in ("disagree", "crash"):
+        group = sorted((f for f in findings if f.kind == kind), key=signature)
+        if not group:
+            continue
+        lines.append(f"## {kind}")
+        for f in group:
+            _p, _f, runner, handler, *_ = f.case_id.split("/")
+            shape = "; ".join(f"{n}={v.status}/{v.bucket_class}"
+                              for n, v in sorted(f.verdicts.items()))
+            lines += [f"### {runner}/{handler}",
+                      f"- seed: `{f.seed_id}`  rng_seed={f.rng_seed}  "
+                      f"iteration={f.iteration}  mutation={f.mutation}",
+                      f"- verdicts: {shape}", ""]
     return "\n".join(lines) + "\n"
 
 
@@ -110,7 +128,7 @@ def _has_operand(case) -> bool:
 
 def _mutate_seed(seed, schema, rng, workdir, bytes_only):
     """Build the seed's request via the tested ``prepare`` path, mutate its
-    operations operand in place, and return the (post-stripped) request.
+    operations operand in place, and return ``(request, mutation_desc)``.
 
     ``prepare`` decompresses every input to a raw ``.ssz`` in ``workdir`` and
     assembles the 10-field line exactly as the differential driver does, so the
@@ -119,18 +137,43 @@ def _mutate_seed(seed, schema, rng, workdir, bytes_only):
     with the mutated raw bytes (still a decompressed ``.ssz``, per protocol.md
     §3.1 field 8) and drop ``post`` so field 4 is absent — the "expect reject"
     signal that turns any accept/reject split into a validity-boundary finding.
+
+    ``mutation_desc`` records what changed for the finding: ``"<field.path>=<value>"``
+    for a schema-path mutation, or ``"bytes"`` for the byte-level path. When the
+    container has no mutable uint leaf (sync_aggregate, consolidation_request,
+    builder_exit_request), the schema mutator returns its empty-path sentinel and
+    we fall back to the byte-level flip, so the operand is still mutated.
     """
     req = prepare(seed, workdir)
     operand = req.inputs[-1]
     raw = operand.read_bytes()
     if bytes_only or schema is None:
-        mutated = mutate_bytes(raw, rng)
+        mutated, desc = mutate_bytes(raw, rng), "bytes"
     else:
         obj = schema.container_for(seed.runner, seed.handler).decode_bytes(raw)
-        mutated_obj, _op = mutate_object(obj, rng)
-        mutated = mutated_obj.encode_bytes()
+        mutated_obj, op = mutate_object(obj, rng)
+        if op.path:
+            mutated, desc = mutated_obj.encode_bytes(), f"{'.'.join(op.path)}={op.value}"
+        else:
+            mutated, desc = mutate_bytes(raw, rng), "bytes"  # no uint leaf: byte fallback
     operand.write_bytes(mutated)
-    return replace(req, post=None)
+    return replace(req, post=None), desc
+
+
+def _finding_kind(agreement, verdicts) -> str | None:
+    """The finding class this iteration warrants, or ``None`` to record nothing.
+
+    A ``DISAGREE`` is a validity-boundary finding. An *asymmetric* crash — at
+    least one backend in the ``bug`` bucket (crash/timeout) but not all of them —
+    is a one-sided-crash finding that ``classify()`` would otherwise fold into
+    ``INFRA`` and mask; a symmetric all-bug iteration is just infra noise.
+    """
+    if agreement.cls == DISAGREE:
+        return "disagree"
+    bugged = [n for n, v in verdicts.items() if v.bucket_class == "bug"]
+    if bugged and len(bugged) < len(verdicts):
+        return "crash"
+    return None
 
 
 def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
@@ -155,7 +198,6 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
         schema = Schema(fork, preset)
     seeds = [c for c in walk_cases(vector_root, preset, fork, runners=("operations",),
                                    subset=0) if _has_operand(c)]
-    rng = random.Random(rng_seed)
     tally: Counter = Counter()
     seen = set()
     findings: list[Finding] = []
@@ -172,14 +214,19 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
                 continue
             workdir = Path(log_dir) / f"mut{i}"
             workdir.mkdir(parents=True, exist_ok=True)
-            req = _mutate_seed(seed, schema, rng, workdir, mutate_bytes_only)
+            # Fresh per-iteration RNG so every mutation replays from (rng_seed, i).
+            rng_i = random.Random(f"{rng_seed}:{i}")
+            req, mutation = _mutate_seed(seed, schema, rng_i, workdir, mutate_bytes_only)
             line = req.line()
             verdicts = {name: c.spec.canonicalize(c.submit(line))
                         for name, c in clients.items()}
-            if classify(verdicts, case_id=seed.id).cls != DISAGREE:
+            ag = classify(verdicts, case_id=seed.id)
+            tally[ag.cls] += 1
+            kind = _finding_kind(ag, verdicts)
+            if kind is None:
                 continue
             f = Finding(case_id=seed.id, verdicts=verdicts, seed_id=seed.id,
-                        rng_seed=rng_seed, mutation=f"iter{i}")
+                        rng_seed=rng_seed, iteration=i, mutation=mutation, kind=kind)
             sig = signature(f)
             if sig not in seen:
                 seen.add(sig)
@@ -210,7 +257,7 @@ def main(argv=None) -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = report_dir / f"{stamp}-{a.fork}-{a.preset}-fuzz.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_fuzz_report(result.findings, a.fork, a.preset))
+    out.write_text(render_fuzz_report(result.findings, a.fork, a.preset, tally=result.tally))
     skipped = result.tally.get(SKIPPED, 0)
     print(f"{len(result.findings)} distinct findings ({skipped} unmapped seeds skipped) -> {out}")
     return 0
