@@ -12,9 +12,29 @@ from pathlib import Path
 import cramjam
 
 # (runner, handler) -> container class name in the fork's pyspec module.
-# Extended in Task 3 to the full operations set.
+# The handler keys are the vector directory names under
+# tests/mainnet/gloas/operations/; each container is the SSZ type the handler's
+# operation input file decodes to, verified by byte-exact round-trip of a real
+# vector (see tests/test_schema.py::OPS). `withdrawals` is intentionally absent:
+# its case dirs carry no operation input (only pre/post state), so there is no
+# seed to decode or mutate.
 _CONTAINER = {
     ("operations", "attestation"): "Attestation",
+    ("operations", "attester_slashing"): "AttesterSlashing",
+    ("operations", "block_header"): "BeaconBlock",
+    ("operations", "bls_to_execution_change"): "SignedBLSToExecutionChange",
+    ("operations", "builder_deposit_request"): "BuilderDepositRequest",
+    ("operations", "builder_exit_request"): "BuilderExitRequest",
+    ("operations", "consolidation_request"): "ConsolidationRequest",
+    ("operations", "deposit_request"): "DepositRequest",
+    ("operations", "execution_payload_bid"): "SignedExecutionPayloadBid",
+    ("operations", "parent_execution_payload"): "BeaconBlock",
+    ("operations", "payload_attestation"): "PayloadAttestation",
+    ("operations", "proposer_slashing"): "ProposerSlashing",
+    ("operations", "sync_aggregate"): "SyncAggregate",
+    ("operations", "voluntary_exit"): "SignedVoluntaryExit",
+    ("operations", "voluntary_exit_churn"): "SignedVoluntaryExit",
+    ("operations", "withdrawal_request"): "WithdrawalRequest",
 }
 
 
