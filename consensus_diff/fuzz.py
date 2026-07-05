@@ -27,3 +27,19 @@ def signature(f: Finding) -> tuple:
         (name, v.status, v.bucket_class) for name, v in f.verdicts.items()
     ))
     return (runner, handler, shape)
+
+
+def shrink(start, candidates, still_diverges):
+    """Greedy shrink: repeatedly replace the current witness with the first smaller
+    candidate that still diverges, until no candidate does. `candidates(x)` yields
+    smaller attempts (most-reduced first); `still_diverges(x)` re-runs the classifier."""
+    current = start
+    changed = True
+    while changed:
+        changed = False
+        for cand in candidates(current):
+            if still_diverges(cand):
+                current = cand
+                changed = True
+                break
+    return current
