@@ -5,8 +5,10 @@ absent (protocol = "expect reject"), and any accept/reject disagreement between
 the backends is a validity-boundary finding. Local / nightly only; never in CI.
 """
 
+import argparse
 import random
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 from consensus_diff.backends import BackendSpec, ServerClient
@@ -150,3 +152,30 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
         for c in clients.values():
             c.close()
     return findings
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(prog="python -m consensus_diff.fuzz")
+    p.add_argument("--backends", type=Path, default=Path("backends.toml"))
+    p.add_argument("--fork", default="gloas")
+    p.add_argument("--preset", default="minimal")
+    p.add_argument("--vector-root", type=Path, required=True)
+    p.add_argument("--iterations", type=int, default=1000)
+    p.add_argument("--rng-seed", type=int, default=0)
+    p.add_argument("--report-dir", type=Path, default=Path("reports"))
+    a = p.parse_args(argv)
+    findings = run_reject_fuzz(
+        backends_path=a.backends, fork=a.fork, preset=a.preset,
+        vector_root=a.vector_root, log_dir=a.report_dir / "logs",
+        iterations=a.iterations, rng_seed=a.rng_seed,
+    )
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = a.report_dir / f"{stamp}-{a.fork}-{a.preset}-fuzz.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_fuzz_report(findings, a.fork, a.preset))
+    print(f"{len(findings)} distinct findings -> {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
