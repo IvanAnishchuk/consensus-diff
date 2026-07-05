@@ -6,7 +6,9 @@ the backends is a validity-boundary finding. Local / nightly only; never in CI.
 """
 
 import argparse
+import hashlib
 import random
+import tomllib
 from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -26,6 +28,18 @@ def _expand(p) -> Path:
     return Path(p).expanduser()
 
 
+def load_known_ids(path) -> frozenset[str]:
+    """Load the triaged known-divergence case ids exactly as the differential
+    driver does (conftest.py): the ``id`` of each ``[[known]]`` entry. A missing
+    file yields the empty set, so a repo without the file just reports everything.
+    """
+    p = Path(path)
+    if not p.exists():
+        return frozenset()
+    data = tomllib.loads(p.read_text(encoding="utf-8"))
+    return frozenset(e["id"] for e in data.get("known", []))
+
+
 @dataclass(frozen=True)
 class Finding:
     case_id: str
@@ -39,12 +53,13 @@ class Finding:
 
 @dataclass(frozen=True)
 class FuzzResult:
-    """The deduplicated findings plus the per-class tally (the denominator) of one
-    run. Iterable / truthy over ``findings`` so a caller can treat it directly as
-    the finding list."""
+    """The deduplicated findings, the per-class tally (the denominator), and the
+    count of distinct requests actually submitted. Iterable / truthy over
+    ``findings`` so a caller can treat it directly as the finding list."""
 
     findings: list[Finding]
     tally: Counter
+    submitted: int = 0
 
     def __iter__(self):
         return iter(self.findings)
@@ -67,14 +82,16 @@ def signature(f: Finding) -> tuple:
 
 
 def render_fuzz_report(findings: list[Finding], fork: str, preset: str,
-                       tally: Counter | None = None) -> str:
+                       tally: Counter | None = None, submitted: int | None = None) -> str:
     """Markdown report: the per-class tally (the denominator — how many mutated
     requests were classified into what) followed by the deduplicated findings
     grouped by kind (disagree / crash)."""
     tally = tally if tally is not None else Counter()
     lines = [f"# consensus-diff fuzz findings — {fork} {preset}", "",
-             f"- iterations classified: {sum(tally.values())}",
-             f"- distinct findings: {len(findings)}", ""]
+             f"- iterations classified: {sum(tally.values())}"]
+    if submitted is not None:
+        lines.append(f"- distinct requests submitted: {submitted}")
+    lines += [f"- distinct findings: {len(findings)}", ""]
     if tally:
         lines.append("## tally")
         lines += [f"- {cls}: {count}" for cls, count in sorted(tally.items())]
@@ -177,14 +194,16 @@ def _finding_kind(agreement, verdicts) -> str | None:
 
 
 def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
-                    iterations, rng_seed, mutate_bytes_only=False):
+                    iterations, rng_seed, mutate_bytes_only=False,
+                    known_ids=frozenset()):
     """Fuzz the reject class: mutate operations seeds, submit each to every
     backend that covers ``(fork, preset)``, and collect the deduplicated
-    accept/reject disagreements.
+    accept/reject disagreements (and one-sided crashes).
 
     The schema (pyspec-aware) lane is used unless ``mutate_bytes_only`` — then
     only the byte-flip complement runs, so no pyspec/eth-remerkleable object
-    model is needed. Deterministic in ``rng_seed``.
+    model is needed. Deterministic in ``rng_seed``. ``known_ids`` reclassifies a
+    triaged divergence as ``KNOWN`` (counted, not a fresh finding).
     """
     vector_root = _expand(vector_root)
     specs = [s for s in BackendSpec.load_all(backends_path)
@@ -200,27 +219,36 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
                                    subset=0) if _has_operand(c)]
     tally: Counter = Counter()
     seen = set()
+    submitted: set = set()
     findings: list[Finding] = []
+    # One reused workdir (#12): prepare overwrites the operand each iteration, so
+    # the disk footprint stays bounded instead of leaving 1000 mut{i}/ dirs.
+    workdir = Path(log_dir) / "mut"
     # spawn_clients closes any partially-spawned client if a later spawn raises;
     # the try/finally then closes them all even if Schema/iteration below raises.
     clients = spawn_clients(specs, fork, preset, log_dir)
     try:
         if not seeds:
-            return FuzzResult(findings, tally)
+            return FuzzResult(findings, tally, 0)
         for i in range(iterations):
             seed = seeds[i % len(seeds)]
             if schema is not None and not schema.knows(seed.runner, seed.handler):
                 tally[SKIPPED] += 1  # unmapped handler: cannot decode/mutate, count it
                 continue
-            workdir = Path(log_dir) / f"mut{i}"
-            workdir.mkdir(parents=True, exist_ok=True)
             # Fresh per-iteration RNG so every mutation replays from (rng_seed, i).
             rng_i = random.Random(f"{rng_seed}:{i}")
             req, mutation = _mutate_seed(seed, schema, rng_i, workdir, mutate_bytes_only)
+            # Dedup on the mutated operand bytes: the reused workdir keeps every
+            # request line identical, and cycling the corpus re-derives the same
+            # single-field mutations, so identical requests must not be resubmitted.
+            key = (seed.id, hashlib.sha256(req.inputs[-1].read_bytes()).digest())
+            if key in submitted:
+                continue
+            submitted.add(key)
             line = req.line()
             verdicts = {name: c.spec.canonicalize(c.submit(line))
                         for name, c in clients.items()}
-            ag = classify(verdicts, case_id=seed.id)
+            ag = classify(verdicts, known_ids=known_ids, case_id=seed.id)
             tally[ag.cls] += 1
             kind = _finding_kind(ag, verdicts)
             if kind is None:
@@ -234,7 +262,7 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     finally:
         for c in clients.values():
             c.close()
-    return FuzzResult(findings, tally)
+    return FuzzResult(findings, tally, len(submitted))
 
 
 def main(argv=None) -> int:
@@ -246,20 +274,25 @@ def main(argv=None) -> int:
     p.add_argument("--iterations", type=int, default=1000)
     p.add_argument("--rng-seed", type=int, default=0)
     p.add_argument("--report-dir", type=Path, default=Path("reports"))
+    p.add_argument("--known", type=Path, default=Path("known-divergences.toml"),
+                   help="TOML of triaged known divergences to suppress (default: repo file)")
     a = p.parse_args(argv)
     backends_path, vector_root, report_dir = (
         _expand(a.backends), _expand(a.vector_root), _expand(a.report_dir))
+    known_ids = load_known_ids(_expand(a.known))
     result = run_reject_fuzz(
         backends_path=backends_path, fork=a.fork, preset=a.preset,
         vector_root=vector_root, log_dir=report_dir / "logs",
-        iterations=a.iterations, rng_seed=a.rng_seed,
+        iterations=a.iterations, rng_seed=a.rng_seed, known_ids=known_ids,
     )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = report_dir / f"{stamp}-{a.fork}-{a.preset}-fuzz.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_fuzz_report(result.findings, a.fork, a.preset, tally=result.tally))
+    out.write_text(render_fuzz_report(result.findings, a.fork, a.preset,
+                                      tally=result.tally, submitted=result.submitted))
     skipped = result.tally.get(SKIPPED, 0)
-    print(f"{len(result.findings)} distinct findings ({skipped} unmapped seeds skipped) -> {out}")
+    print(f"{len(result.findings)} distinct findings, {result.submitted} requests "
+          f"({skipped} unmapped seeds skipped) -> {out}")
     return 0
 
 

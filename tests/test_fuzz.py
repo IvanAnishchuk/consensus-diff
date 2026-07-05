@@ -10,13 +10,43 @@ from consensus_diff.fuzz import (
     Finding,
     _expand,
     _mutate_seed,
+    load_known_ids,
     render_fuzz_report,
     run_reject_fuzz,
     shrink,
     signature,
 )
+from consensus_diff.mutate import mutate_bytes
 from consensus_diff.protocol import Verdict
 from consensus_diff.vectors import Case
+
+
+def _boundary_backends_toml(tmp_path) -> Path:
+    """Two fake backends that disagree on every request (validity boundary)."""
+    backends = tmp_path / "backends.toml"
+    backends.write_text(textwrap.dedent(f"""
+        [backends.etheorem]
+        cmd = ["{sys.executable}", "{FAKE}"]
+        env = {{ FAKE_MODE = "reject-boundary" }}
+        forks = ["gloas"]
+        presets = ["minimal"]
+        handshake_grace = 0.3
+
+        [backends.moonglass]
+        cmd = ["{sys.executable}", "{FAKE}"]
+        env = {{ FAKE_MODE = "reject-boundary", FAKE_ACCEPTS = "1" }}
+        forks = ["gloas"]
+        presets = ["minimal"]
+        handshake_grace = 0.3
+    """))
+    return backends
+
+
+def _one_attestation_seed(tmp_path) -> None:
+    case = tmp_path / "tests" / "minimal" / "gloas" / "operations" / "attestation" / "s" / "c1"
+    case.mkdir(parents=True)
+    (case / "pre.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"PRE")))
+    (case / "attestation.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"OP")))
 
 FAKE = Path(__file__).parent / "fake_backend.py"
 
@@ -175,3 +205,60 @@ def test_asymmetric_crash_is_a_crash_finding_and_report_shows_tally(tmp_path):
     text = render_fuzz_report(result.findings, "gloas", "minimal", tally=result.tally)
     assert "## tally" in text and "infra:" in text   # denominator printed
     assert "## crash" in text
+
+
+def test_load_known_ids_reads_toml(tmp_path):
+    p = tmp_path / "known.toml"
+    p.write_text('[[known]]\nid = "minimal/gloas/operations/attestation/s/c1"\nreason = "x"\n')
+    assert load_known_ids(p) == frozenset({"minimal/gloas/operations/attestation/s/c1"})
+    assert load_known_ids(tmp_path / "absent.toml") == frozenset()  # missing file -> empty
+
+
+def test_repeated_request_is_not_submitted_twice(tmp_path):
+    _one_attestation_seed(tmp_path)
+    backends = tmp_path / "backends.toml"
+    backends.write_text(textwrap.dedent(f"""
+        [backends.a]
+        cmd = ["{sys.executable}", "{FAKE}"]
+        env = {{ FAKE_MODE = "ok" }}
+        forks = ["gloas"]
+        presets = ["minimal"]
+        handshake_grace = 0.3
+
+        [backends.b]
+        cmd = ["{sys.executable}", "{FAKE}"]
+        env = {{ FAKE_MODE = "ok" }}
+        forks = ["gloas"]
+        presets = ["minimal"]
+        handshake_grace = 0.3
+    """))
+    iterations = 40
+    result = run_reject_fuzz(
+        backends_path=backends, fork="gloas", preset="minimal",
+        vector_root=tmp_path, log_dir=tmp_path / "logs",
+        iterations=iterations, rng_seed=1, mutate_bytes_only=True,
+    )
+    # "OP" is 2 bytes; single-bit flips give <=16 distinct operands, so the cycling
+    # corpus repeats and dedup must fire: distinct submissions < iterations.
+    expected = {mutate_bytes(b"OP", random.Random(f"1:{i}")) for i in range(iterations)}
+    assert result.submitted == len(expected)
+    assert result.submitted < iterations
+    # #12: a single reused workdir, not one dir per iteration.
+    assert (tmp_path / "logs" / "mut").is_dir()
+    assert not list((tmp_path / "logs").glob("mut[0-9]*"))
+
+
+def test_known_divergence_is_not_a_new_finding(tmp_path):
+    _one_attestation_seed(tmp_path)
+    backends = _boundary_backends_toml(tmp_path)
+    seed_id = "minimal/gloas/operations/attestation/s/c1"
+    common = dict(backends_path=backends, fork="gloas", preset="minimal",
+                  vector_root=tmp_path, log_dir=tmp_path / "logs",
+                  iterations=3, rng_seed=42, mutate_bytes_only=True)
+    # Control: an unlisted boundary split is a fresh finding.
+    control = run_reject_fuzz(**common, known_ids=frozenset())
+    assert control.findings
+    # Listed in the known set: counted as KNOWN, never a fresh finding.
+    result = run_reject_fuzz(**common, known_ids=frozenset({seed_id}))
+    assert not result.findings
+    assert result.tally.get("known", 0) >= 1
