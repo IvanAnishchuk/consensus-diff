@@ -80,3 +80,14 @@ def mutate_object(obj, rng: random.Random):
     setattr(target, path[-1], new_value)
 
     return mutated, MutationOp(path, repr(int(new_value)))
+
+
+def mutate_bytes(data: bytes, rng: random.Random) -> bytes:
+    """Flip one byte in place. Length-preserving so SSZ offset tables stay parseable;
+    the decode-validity gate at the backend discards mutations that still break decode."""
+    if not data:
+        return data
+    buf = bytearray(data)
+    i = rng.randrange(len(buf))
+    buf[i] ^= 1 << rng.randrange(8)
+    return bytes(buf)

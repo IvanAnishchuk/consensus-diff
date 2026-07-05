@@ -1,6 +1,6 @@
 import random
 
-from consensus_diff.mutate import mutate_object
+from consensus_diff.mutate import mutate_bytes, mutate_object
 from consensus_diff.schema import Schema
 
 
@@ -19,3 +19,12 @@ def test_mutation_is_deterministic_and_changes_root():
     assert schema.htr(m1) != base_root
     # Still decode-valid: it re-serializes.
     assert m1.encode_bytes() == m2.encode_bytes()
+
+
+def test_byte_mutation_is_deterministic_and_bounded():
+    data = bytes(range(32))
+    a = mutate_bytes(data, random.Random(7))
+    b = mutate_bytes(data, random.Random(7))
+    assert a == b            # reproducible
+    assert a != data         # changed something
+    assert len(a) == len(data)  # in-place flip keeps length (offset tables survive)
