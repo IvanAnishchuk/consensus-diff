@@ -1,5 +1,13 @@
-from consensus_diff.fuzz import Finding, shrink, signature
+import sys
+import textwrap
+from pathlib import Path
+
+import cramjam
+
+from consensus_diff.fuzz import Finding, run_reject_fuzz, shrink, signature
 from consensus_diff.protocol import Verdict
+
+FAKE = Path(__file__).parent / "fake_backend.py"
 
 
 def test_signature_groups_same_shape_different_field():
@@ -27,3 +35,36 @@ def test_shrink_reduces_to_minimal_still_diverging():
     def still_diverges(x):
         return x >= 10
     assert shrink(100, candidates, still_diverges) == 10
+
+
+def test_reject_fuzz_finds_boundary_divergence(tmp_path):
+    # One operations/attestation seed in a throwaway vector root (adapt layout to walk_cases).
+    case = tmp_path / "tests" / "minimal" / "gloas" / "operations" / "attestation" / "s" / "c1"
+    case.mkdir(parents=True)
+    (case / "pre.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"PRE")))
+    (case / "attestation.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"OP")))
+
+    backends = tmp_path / "backends.toml"
+    backends.write_text(textwrap.dedent(f"""
+        [backends.etheorem]
+        cmd = ["{sys.executable}", "{FAKE}"]
+        env = {{ FAKE_MODE = "reject-boundary" }}
+        forks = ["gloas"]
+        presets = ["minimal"]
+        handshake_grace = 0.3
+
+        [backends.moonglass]
+        cmd = ["{sys.executable}", "{FAKE}"]
+        env = {{ FAKE_MODE = "reject-boundary", FAKE_ACCEPTS = "1" }}
+        forks = ["gloas"]
+        presets = ["minimal"]
+        handshake_grace = 0.3
+    """))
+
+    findings = run_reject_fuzz(
+        backends_path=backends, fork="gloas", preset="minimal",
+        vector_root=tmp_path, log_dir=tmp_path / "logs",
+        iterations=3, rng_seed=42, mutate_bytes_only=True,
+    )
+    assert findings, "expected a validity-boundary divergence"
+    assert all(f.verdicts.keys() == {"etheorem", "moonglass"} for f in findings)
