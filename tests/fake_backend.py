@@ -14,6 +14,10 @@ FAKE_MODE env var picks the behavior:
   slow-badargv  -> sleep 0.6s, then exit 2 (simulates a backend that does slow
                    init before deciding it cannot handle the fork/preset; used to
                    test that a generous handshake_grace catches delayed failures)
+  reject-boundary -> pass\treject\tboundary  when FAKE_ACCEPTS unset;
+                     fail\taccept-invalid\tboundary  when FAKE_ACCEPTS set.
+                     Two instances (one with FAKE_ACCEPTS) disagree on every
+                     request, synthesizing a validity-boundary divergence.
 """
 
 import os
@@ -46,6 +50,13 @@ def main() -> None:
             time.sleep(3600)
         if mode == "garbage" and n == 1:
             print("not a protocol line")
+            sys.stdout.flush()
+            continue
+        if mode == "reject-boundary":
+            if os.environ.get("FAKE_ACCEPTS"):
+                print("fail\taccept-invalid\tboundary")
+            else:
+                print("pass\treject\tboundary")
             sys.stdout.flush()
             continue
         if mode == "reject":
