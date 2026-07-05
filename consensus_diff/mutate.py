@@ -49,13 +49,17 @@ def _leaf_uint_paths(obj, prefix: tuple[str, ...] = ()):
 def _edge_value(leaf: uint) -> uint:
     """An edge value for a uint leaf, guaranteed to differ from ``leaf``.
 
-    Prefer the all-ones maximum for the type's width (the over-range boundary
-    the reject-class fuzzer wants to probe); fall back to 0 only when the leaf
-    already sits at that maximum, so the mutation always changes the root.
+    Prefer the type's in-range maximum — the all-ones value for the width, which
+    remerkleable exposes as ``_max_val``. remerkleable *rejects* anything above
+    ``_max_val``, so this is not an over-range value but the largest the leaf can
+    legally hold; it is still frequently semantically invalid (a far-future
+    slot/epoch, an oversized count) — exactly the validity edge the reject-class
+    fuzzer probes. Fall back to 0 only when the leaf already sits at that maximum,
+    so the mutation always changes the root.
     """
     leaf_type = type(leaf)
-    all_ones = (1 << (leaf_type.type_byte_length() * 8)) - 1
-    return leaf_type(0 if int(leaf) == all_ones else all_ones)
+    top = leaf_type._max_val
+    return leaf_type(0 if int(leaf) == top else top)
 
 
 def mutate_object(obj, rng: random.Random):

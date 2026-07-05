@@ -18,7 +18,7 @@ from consensus_diff.backends import BackendSpec, spawn_clients
 from consensus_diff.compare import DISAGREE, SKIPPED, classify
 from consensus_diff.mutate import mutate_bytes, mutate_object
 from consensus_diff.protocol import Verdict
-from consensus_diff.vectors import prepare, walk_cases
+from consensus_diff.vectors import is_operand_stem, prepare, walk_cases
 
 
 def _expand(p) -> Path:
@@ -42,8 +42,10 @@ def load_known_ids(path) -> frozenset[str]:
 
 @dataclass(frozen=True)
 class Finding:
-    case_id: str
+    runner: str
+    handler: str
     verdicts: dict[str, Verdict]
+    reason: str  # the classifier's per-backend rendering (evidence; never re-parsed)
     seed_id: str
     rng_seed: int
     iteration: int
@@ -74,11 +76,10 @@ class FuzzResult:
 def signature(f: Finding) -> tuple:
     """Dedup key: runner/handler + the sorted per-backend (status, bucket_class) shape.
     Independent of which specific seed or field produced it."""
-    _preset, _fork, runner, handler, *_ = f.case_id.split("/")
     shape = tuple(sorted(
         (name, v.status, v.bucket_class) for name, v in f.verdicts.items()
     ))
-    return (runner, handler, shape)
+    return (f.runner, f.handler, shape)
 
 
 def render_fuzz_report(findings: list[Finding], fork: str, preset: str,
@@ -102,43 +103,24 @@ def render_fuzz_report(findings: list[Finding], fork: str, preset: str,
             continue
         lines.append(f"## {kind}")
         for f in group:
-            _p, _f, runner, handler, *_ = f.case_id.split("/")
-            shape = "; ".join(f"{n}={v.status}/{v.bucket_class}"
-                              for n, v in sorted(f.verdicts.items()))
-            lines += [f"### {runner}/{handler}",
+            lines += [f"### {f.runner}/{f.handler}",
                       f"- seed: `{f.seed_id}`  rng_seed={f.rng_seed}  "
                       f"iteration={f.iteration}  mutation={f.mutation}",
-                      f"- verdicts: {shape}", ""]
+                      f"- verdicts: {f.reason}", ""]
     return "\n".join(lines) + "\n"
-
-
-def shrink(start, candidates, still_diverges):
-    """Greedy shrink: repeatedly replace the current witness with the first smaller
-    candidate that still diverges, until no candidate does. `candidates(x)` yields
-    smaller attempts (most-reduced first); `still_diverges(x)` re-runs the classifier."""
-    current = start
-    changed = True
-    while changed:
-        changed = False
-        for cand in candidates(current):
-            if still_diverges(cand):
-                current = cand
-                changed = True
-                break
-    return current
 
 
 def _has_operand(case) -> bool:
     """True iff the operations case carries an operand file to mutate.
 
     An operand is the single snappy file whose stem is not ``pre``/``post`` and
-    is not a ``blocks_*`` entry (docs/protocol.md §3.1, field-8 assembly). The
+    is not a ``blocks_N`` block (docs/protocol.md §3.1, field-8 assembly). The
     ``withdrawals`` handler carries only pre/post state, so it is skipped — there
-    is nothing to mutate.
+    is nothing to mutate. The ``is_operand_stem`` predicate is shared with
+    ``vectors.prepare`` so the two never disagree on what an operand is.
     """
     for p in case.path.glob("*.ssz_snappy"):
-        stem = p.name.removesuffix(".ssz_snappy")
-        if stem not in ("pre", "post") and not stem.startswith("blocks_"):
+        if is_operand_stem(p.name.removesuffix(".ssz_snappy")):
             return True
     return False
 
@@ -253,8 +235,9 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
             kind = _finding_kind(ag, verdicts)
             if kind is None:
                 continue
-            f = Finding(case_id=seed.id, verdicts=verdicts, seed_id=seed.id,
-                        rng_seed=rng_seed, iteration=i, mutation=mutation, kind=kind)
+            f = Finding(runner=seed.runner, handler=seed.handler, verdicts=verdicts,
+                        reason=ag.reason, seed_id=seed.id, rng_seed=rng_seed,
+                        iteration=i, mutation=mutation, kind=kind)
             sig = signature(f)
             if sig not in seen:
                 seen.add(sig)

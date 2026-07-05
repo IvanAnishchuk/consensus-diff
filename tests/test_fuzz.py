@@ -13,7 +13,6 @@ from consensus_diff.fuzz import (
     load_known_ids,
     render_fuzz_report,
     run_reject_fuzz,
-    shrink,
     signature,
 )
 from consensus_diff.mutate import mutate_bytes
@@ -81,29 +80,19 @@ def test_signature_groups_same_shape_different_field():
         "etheorem": Verdict("pass", "reject", "x"),
         "moonglass": Verdict("fail", "accept-invalid", "y"),
     }
-    f1 = Finding(case_id="minimal/gloas/operations/attestation/c1", verdicts=v,
-                 seed_id="c1", rng_seed=1, iteration=0, mutation="attestation.slot",
-                 kind="disagree")
-    f2 = Finding(case_id="minimal/gloas/operations/attestation/c9", verdicts=v,
-                 seed_id="c9", rng_seed=2, iteration=5, mutation="attestation.slot",
-                 kind="disagree")
+    f1 = Finding(runner="operations", handler="attestation", verdicts=v, reason="r1",
+                 seed_id="minimal/gloas/operations/attestation/s/c1", rng_seed=1,
+                 iteration=0, mutation="attestation.slot", kind="disagree")
+    f2 = Finding(runner="operations", handler="attestation", verdicts=v, reason="r2",
+                 seed_id="minimal/gloas/operations/attestation/s/c9", rng_seed=2,
+                 iteration=5, mutation="attestation.slot", kind="disagree")
     # Same runner/handler + same disagree shape -> same signature (dedup).
     assert signature(f1) == signature(f2)
     # A different disagree shape -> different signature.
     v2 = {"etheorem": Verdict("pass", "ok", ""), "moonglass": Verdict("fail", "mismatch", "")}
-    f3 = Finding(case_id=f1.case_id, verdicts=v2, seed_id="c1", rng_seed=1, iteration=0,
-                 mutation="x", kind="disagree")
+    f3 = Finding(runner="operations", handler="attestation", verdicts=v2, reason="r3",
+                 seed_id=f1.seed_id, rng_seed=1, iteration=0, mutation="x", kind="disagree")
     assert signature(f3) != signature(f1)
-
-
-def test_shrink_reduces_to_minimal_still_diverging():
-    # Candidates are ints; "diverges" iff value >= 10. Shrinker should walk down
-    # to the smallest still-diverging candidate among those offered.
-    def candidates(x):
-        return [x - 1, x - 5] if x > 0 else []
-    def still_diverges(x):
-        return x >= 10
-    assert shrink(100, candidates, still_diverges) == 10
 
 
 def test_reject_fuzz_finds_boundary_divergence(tmp_path):
@@ -144,15 +133,16 @@ def test_render_report_lists_findings_by_signature():
         "etheorem": Verdict("pass", "reject", ""),
         "moonglass": Verdict("fail", "accept-invalid", ""),
     }
-    f = Finding(case_id="minimal/gloas/operations/attestation/c1", verdicts=v,
-                seed_id="c1", rng_seed=42, iteration=0, mutation="attestation.slot",
-                kind="disagree")
+    f = Finding(runner="operations", handler="attestation", verdicts=v,
+                reason="etheorem=pass/reject; moonglass=fail/accept-invalid (boundary)",
+                seed_id="minimal/gloas/operations/attestation/s/c1", rng_seed=42,
+                iteration=0, mutation="attestation.slot", kind="disagree")
     text = render_fuzz_report([f], fork="gloas", preset="minimal")
     assert "operations/attestation" in text
     assert "rng_seed=42" in text          # reproducibility recorded
     assert "iteration=0" in text          # replays from (rng_seed, iteration)
     assert "mutation=attestation.slot" in text
-    assert "etheorem=pass/reject" in text
+    assert "etheorem=pass/reject" in text  # the classifier's reason, not a re-derived shape
 
 
 def test_mutate_seed_byte_fallback_for_uintless_container(tmp_path):
