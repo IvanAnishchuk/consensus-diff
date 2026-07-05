@@ -3,11 +3,44 @@ import textwrap
 from pathlib import Path
 
 import cramjam
+import pytest
 
-from consensus_diff.fuzz import Finding, render_fuzz_report, run_reject_fuzz, shrink, signature
+from consensus_diff.fuzz import (
+    Finding,
+    _expand,
+    render_fuzz_report,
+    run_reject_fuzz,
+    shrink,
+    signature,
+)
 from consensus_diff.protocol import Verdict
 
 FAKE = Path(__file__).parent / "fake_backend.py"
+
+
+def test_expand_resolves_home_prefix():
+    # argparse would hand "~/x" through literally; _expand must resolve it so the
+    # documented README run (a ~-rooted cache dir) doesn't look under a "~" dir.
+    p = _expand(Path("~/nonexistent-xyz"))
+    assert not str(p).startswith("~")
+    assert p == Path.home() / "nonexistent-xyz"
+
+
+def test_run_reject_fuzz_rejects_uncovered_fork(tmp_path):
+    backends = tmp_path / "backends.toml"
+    backends.write_text(textwrap.dedent(f"""
+        [backends.only-capella]
+        cmd = ["{sys.executable}", "{FAKE}"]
+        forks = ["capella"]
+        presets = ["minimal"]
+        handshake_grace = 0.3
+    """))
+    with pytest.raises(ValueError, match="no backend"):
+        run_reject_fuzz(
+            backends_path=backends, fork="gloas", preset="minimal",
+            vector_root=tmp_path, log_dir=tmp_path / "logs",
+            iterations=1, rng_seed=0, mutate_bytes_only=True,
+        )
 
 
 def test_signature_groups_same_shape_different_field():

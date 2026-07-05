@@ -42,6 +42,13 @@ class Schema:
     def __init__(self, fork: str, preset: str) -> None:
         self._spec = import_module(f"eth_consensus_specs.{fork}.{preset}")
 
+    @staticmethod
+    def knows(runner: str, handler: str) -> bool:
+        """True iff ``(runner, handler)`` has a mapped container — i.e. a seed the
+        schema lane can decode/mutate. A schema-mode seed for an unmapped handler
+        must be skipped (counted), never decoded (that would KeyError)."""
+        return (runner, handler) in _CONTAINER
+
     def container_for(self, runner: str, handler: str) -> type:
         name = _CONTAINER[(runner, handler)]
         return getattr(self._spec, name)

@@ -35,6 +35,13 @@ def test_container_for_operations(handler, cls_name):
     assert schema.container_for("operations", handler).__name__ == cls_name
 
 
+def test_knows_maps_and_rejects():
+    schema = Schema(fork="gloas", preset="mainnet")
+    assert schema.knows("operations", "attestation")     # mapped -> decode/mutate
+    assert not schema.knows("operations", "withdrawals")  # only pre/post, no operand
+    assert not schema.knows("sanity", "blocks")           # not a schema-lane handler
+
+
 def test_attestation_round_trip(tmp_path):
     schema = Schema(fork="gloas", preset="mainnet")
     # Build a canonical empty Attestation via the schema and write it as a seed.

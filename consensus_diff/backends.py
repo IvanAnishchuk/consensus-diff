@@ -193,3 +193,25 @@ class ServerClient:
                 self._kill()
         self._proc = None
         self._closed = True
+
+
+def spawn_clients(
+    specs: list[BackendSpec], fork: str, preset: str, log_dir: Path
+) -> dict[str, ServerClient]:
+    """Spawn one warm ``ServerClient`` per spec, name-keyed.
+
+    Builds clients one at a time; if any spawn raises (a bad-argv /
+    unsupported-fork ``HandshakeError``, or anything else), the clients already
+    built are closed before the exception re-propagates, so a partial failure
+    never leaks a live backend process. ``BaseException`` so a ``KeyboardInterrupt``
+    mid-spawn also cleans up.
+    """
+    clients: dict[str, ServerClient] = {}
+    try:
+        for spec in specs:
+            clients[spec.name] = ServerClient(spec, fork, preset, log_dir)
+    except BaseException:
+        for client in clients.values():
+            client.close()
+        raise
+    return clients

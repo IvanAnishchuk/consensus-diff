@@ -7,15 +7,23 @@ the backends is a validity-boundary finding. Local / nightly only; never in CI.
 
 import argparse
 import random
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from consensus_diff.backends import BackendSpec, ServerClient
-from consensus_diff.compare import DISAGREE, classify
+from consensus_diff.backends import BackendSpec, spawn_clients
+from consensus_diff.compare import DISAGREE, SKIPPED, classify
 from consensus_diff.mutate import mutate_bytes, mutate_object
 from consensus_diff.protocol import Verdict
 from consensus_diff.vectors import prepare, walk_cases
+
+
+def _expand(p) -> Path:
+    """Resolve a leading ``~``. argparse hands ``--vector-root=~/x`` through as a
+    literal ``~`` path, so every filesystem path the fuzzer accepts is run through
+    this before use (the documented README run uses a ``~``-rooted cache dir)."""
+    return Path(p).expanduser()
 
 
 @dataclass(frozen=True)
@@ -25,6 +33,25 @@ class Finding:
     seed_id: str
     rng_seed: int
     mutation: str
+
+
+@dataclass(frozen=True)
+class FuzzResult:
+    """The deduplicated findings plus the per-class tally (the denominator) of one
+    run. Iterable / truthy over ``findings`` so a caller can treat it directly as
+    the finding list."""
+
+    findings: list[Finding]
+    tally: Counter
+
+    def __iter__(self):
+        return iter(self.findings)
+
+    def __len__(self) -> int:
+        return len(self.findings)
+
+    def __bool__(self) -> bool:
+        return bool(self.findings)
 
 
 def signature(f: Finding) -> tuple:
@@ -116,24 +143,33 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     only the byte-flip complement runs, so no pyspec/eth-remerkleable object
     model is needed. Deterministic in ``rng_seed``.
     """
+    vector_root = _expand(vector_root)
     specs = [s for s in BackendSpec.load_all(backends_path)
              if fork in s.forks and preset in s.presets]
-    clients = {s.name: ServerClient(s, fork, preset, log_dir) for s in specs}
+    if not specs:
+        raise ValueError(f"no backend in {backends_path} covers {fork}/{preset}")
     schema = None
     if not mutate_bytes_only:
         # Lazy: importing Schema pulls the heavy pyspec (eth_consensus_specs).
         from consensus_diff.schema import Schema
         schema = Schema(fork, preset)
+    seeds = [c for c in walk_cases(vector_root, preset, fork, runners=("operations",),
+                                   subset=0) if _has_operand(c)]
     rng = random.Random(rng_seed)
+    tally: Counter = Counter()
     seen = set()
     findings: list[Finding] = []
+    # spawn_clients closes any partially-spawned client if a later spawn raises;
+    # the try/finally then closes them all even if Schema/iteration below raises.
+    clients = spawn_clients(specs, fork, preset, log_dir)
     try:
-        seeds = [c for c in walk_cases(vector_root, preset, fork, runners=("operations",),
-                                       subset=0) if _has_operand(c)]
         if not seeds:
-            return findings
+            return FuzzResult(findings, tally)
         for i in range(iterations):
             seed = seeds[i % len(seeds)]
+            if schema is not None and not schema.knows(seed.runner, seed.handler):
+                tally[SKIPPED] += 1  # unmapped handler: cannot decode/mutate, count it
+                continue
             workdir = Path(log_dir) / f"mut{i}"
             workdir.mkdir(parents=True, exist_ok=True)
             req = _mutate_seed(seed, schema, rng, workdir, mutate_bytes_only)
@@ -151,7 +187,7 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     finally:
         for c in clients.values():
             c.close()
-    return findings
+    return FuzzResult(findings, tally)
 
 
 def main(argv=None) -> int:
@@ -164,16 +200,19 @@ def main(argv=None) -> int:
     p.add_argument("--rng-seed", type=int, default=0)
     p.add_argument("--report-dir", type=Path, default=Path("reports"))
     a = p.parse_args(argv)
-    findings = run_reject_fuzz(
-        backends_path=a.backends, fork=a.fork, preset=a.preset,
-        vector_root=a.vector_root, log_dir=a.report_dir / "logs",
+    backends_path, vector_root, report_dir = (
+        _expand(a.backends), _expand(a.vector_root), _expand(a.report_dir))
+    result = run_reject_fuzz(
+        backends_path=backends_path, fork=a.fork, preset=a.preset,
+        vector_root=vector_root, log_dir=report_dir / "logs",
         iterations=a.iterations, rng_seed=a.rng_seed,
     )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = a.report_dir / f"{stamp}-{a.fork}-{a.preset}-fuzz.md"
+    out = report_dir / f"{stamp}-{a.fork}-{a.preset}-fuzz.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_fuzz_report(findings, a.fork, a.preset))
-    print(f"{len(findings)} distinct findings -> {out}")
+    out.write_text(render_fuzz_report(result.findings, a.fork, a.preset))
+    skipped = result.tally.get(SKIPPED, 0)
+    print(f"{len(result.findings)} distinct findings ({skipped} unmapped seeds skipped) -> {out}")
     return 0
 
 
