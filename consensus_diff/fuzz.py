@@ -35,6 +35,19 @@ def signature(f: Finding) -> tuple:
     return (runner, handler, shape)
 
 
+def render_fuzz_report(findings: list[Finding], fork: str, preset: str) -> str:
+    lines = [f"# consensus-diff fuzz findings — {fork} {preset}", "",
+             f"- distinct findings: {len(findings)}", ""]
+    for f in sorted(findings, key=signature):
+        _p, _f, runner, handler, *_ = f.case_id.split("/")
+        shape = "; ".join(f"{n}={v.status}/{v.bucket_class}"
+                          for n, v in sorted(f.verdicts.items()))
+        lines += [f"## {runner}/{handler}",
+                  f"- seed: `{f.seed_id}`  rng_seed={f.rng_seed}  mutation={f.mutation}",
+                  f"- verdicts: {shape}", ""]
+    return "\n".join(lines) + "\n"
+
+
 def shrink(start, candidates, still_diverges):
     """Greedy shrink: repeatedly replace the current witness with the first smaller
     candidate that still diverges, until no candidate does. `candidates(x)` yields

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import cramjam
 
-from consensus_diff.fuzz import Finding, run_reject_fuzz, shrink, signature
+from consensus_diff.fuzz import Finding, render_fuzz_report, run_reject_fuzz, shrink, signature
 from consensus_diff.protocol import Verdict
 
 FAKE = Path(__file__).parent / "fake_backend.py"
@@ -68,3 +68,16 @@ def test_reject_fuzz_finds_boundary_divergence(tmp_path):
     )
     assert findings, "expected a validity-boundary divergence"
     assert all(f.verdicts.keys() == {"etheorem", "moonglass"} for f in findings)
+
+
+def test_render_report_lists_findings_by_signature():
+    v = {
+        "etheorem": Verdict("pass", "reject", ""),
+        "moonglass": Verdict("fail", "accept-invalid", ""),
+    }
+    f = Finding(case_id="minimal/gloas/operations/attestation/c1", verdicts=v,
+                seed_id="c1", rng_seed=42, mutation="iter0")
+    text = render_fuzz_report([f], fork="gloas", preset="minimal")
+    assert "operations/attestation" in text
+    assert "rng_seed=42" in text        # reproducibility recorded
+    assert "etheorem=pass/reject" in text
