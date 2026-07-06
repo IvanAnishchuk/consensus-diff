@@ -27,19 +27,19 @@ from consensus_diff.vectors import PINNED_TAG, Case, ensure_archive, prepare, wa
 
 
 def _pyspec_available() -> bool:
-    """True iff the pyspec is installed for the fork the schema lane uses.
+    """True iff the pyspec is installed for the fork/preset the schema lane uses.
 
-    Check the fork submodule, not just the top package: Schema.__init__ imports
-    ``eth_consensus_specs.<fork>.<preset>``, so a stale/partial install with the
-    top package but no gloas would slip past a top-level check and fail late in
-    Schema instead of skipping cleanly (coderabbit review). ``find_spec`` on a
-    dotted name *raises* ModuleNotFoundError when the top package is absent (the
-    common "no pyspec" case) rather than returning None, so treat that as missing.
-    It decides without importing the heavy fork module.
+    Check the exact ``eth_consensus_specs.gloas.mainnet`` module Schema.__init__
+    imports, not just the top package or fork: a stale/partial install missing that
+    module would slip past a shallower check and fail late in Schema instead of
+    skipping cleanly (coderabbit / copilot review). ``find_spec`` on a dotted name
+    *raises* when an intermediate package is absent (the common "no pyspec" case)
+    rather than returning None, so treat any ImportError -- ModuleNotFoundError, or
+    a broken package whose import raises something else -- as missing.
     """
     try:
-        return importlib.util.find_spec("eth_consensus_specs.gloas") is not None
-    except ModuleNotFoundError:
+        return importlib.util.find_spec("eth_consensus_specs.gloas.mainnet") is not None
+    except ImportError:
         return False
 
 

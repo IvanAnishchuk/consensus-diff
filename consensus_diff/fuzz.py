@@ -273,10 +273,14 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     # The fork/preset/pid suffix keeps concurrent fuzz runs that share one log_dir
     # from corrupting each other's operand file, and the finally below removes it.
     workdir = Path(log_dir) / f"mut_{fork}_{preset}_{os.getpid()}"
-    # spawn_clients closes any partially-spawned client if a later spawn raises;
-    # the try/finally then closes them all even if Schema/iteration below raises.
-    clients = spawn_clients(specs, fork, preset, log_dir)
+    # Acquire inside the try so the finally always cleans up. spawn_clients closes
+    # any partially-spawned client if a later spawn raises; initializing `clients`
+    # first and spawning inside the try also closes the gap where an async exception
+    # (e.g. KeyboardInterrupt) between the spawn and the try could leak the already-
+    # started subprocesses (gemini review). The finally closes whatever got spawned.
+    clients: dict = {}
     try:
+        clients = spawn_clients(specs, fork, preset, log_dir)
         for i in range(iterations):
             seed = seeds[i % len(seeds)]  # every seed is mapped: pre-filtered above
             # Fresh per-iteration RNG so every mutation replays from (rng_seed, i).
@@ -285,9 +289,10 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
                 seed, schema, rng_i, workdir, mutate_bytes_only)
             if decode_failed:
                 decode_errors += 1
-            # Dedup on the mutated operand bytes: the reused workdir keeps every
-            # request line identical, and cycling the corpus re-derives the same
-            # single-field mutations, so identical requests must not be resubmitted.
+            # Dedup per (seed, mutated-operand) pair: the key is the seed id plus the
+            # sha256 of the mutated bytes. The reused workdir keeps every request line
+            # identical, and cycling the corpus re-derives the same single-field
+            # mutations, so an identical (seed, mutation) must not be resubmitted.
             key = (seed.id, hashlib.sha256(mutated).digest())
             if key in submitted:
                 continue
