@@ -208,6 +208,24 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     seen = set()
     submitted: set = set()
     findings: list[Finding] = []
+    # Nothing eligible to fuzz: bail before spawning clients. spawn_clients starts
+    # subprocesses and runs handshakes, so doing it only to close them again on an
+    # empty corpus is pure waste (gemini/copilot review).
+    if not seeds:
+        return FuzzResult(findings, tally, 0)
+    # Pre-filter to seeds this Schema can decode/mutate, so every one of `iterations`
+    # steps lands on a fuzzable seed instead of cycling onto unmapped handlers and
+    # burning the budget on skips (gemini review). SKIPPED then counts unmapped seeds
+    # once -- a stable corpus property -- rather than per-iteration skips that scaled
+    # with `iterations`. Byte-only mode (schema is None) can fuzz every seed, so it
+    # skips the filter.
+    if schema is not None:
+        n_all = len(seeds)
+        seeds = [s for s in seeds if schema.knows(s.runner, s.handler)]
+        if n_all > len(seeds):
+            tally[SKIPPED] = n_all - len(seeds)
+        if not seeds:
+            return FuzzResult(findings, tally, 0)
     # One per-run workdir (#12): prepare overwrites the operand each iteration, so
     # the disk footprint stays bounded to a single dir instead of 1000 mut{i}/ ones.
     # The fork/preset/pid suffix keeps concurrent fuzz runs that share one log_dir
@@ -217,13 +235,8 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     # the try/finally then closes them all even if Schema/iteration below raises.
     clients = spawn_clients(specs, fork, preset, log_dir)
     try:
-        if not seeds:
-            return FuzzResult(findings, tally, 0)
         for i in range(iterations):
-            seed = seeds[i % len(seeds)]
-            if schema is not None and not schema.knows(seed.runner, seed.handler):
-                tally[SKIPPED] += 1  # unmapped handler: cannot decode/mutate, count it
-                continue
+            seed = seeds[i % len(seeds)]  # every seed is mapped: pre-filtered above
             # Fresh per-iteration RNG so every mutation replays from (rng_seed, i).
             rng_i = random.Random(f"{rng_seed}:{i}")
             req, mutation, mutated = _mutate_seed(seed, schema, rng_i, workdir, mutate_bytes_only)

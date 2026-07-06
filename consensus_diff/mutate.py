@@ -38,11 +38,11 @@ def _leaf_uint_paths(obj, prefix: tuple[str, ...] = ()):
     Order follows Container field-declaration order, so the same object always
     yields the same sequence -- the basis of the mutation's determinism.
     """
-    for name, ftype in type(obj).fields().items():
+    for name in type(obj).fields():
         value = getattr(obj, name)
         if isinstance(value, uint):
             yield prefix + (name,), value
-        elif issubclass(ftype, Container):
+        elif isinstance(value, Container):
             yield from _leaf_uint_paths(value, prefix + (name,))
 
 
