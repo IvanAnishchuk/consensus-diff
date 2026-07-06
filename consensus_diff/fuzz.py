@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from consensus_diff.backends import BackendSpec, spawn_clients
-from consensus_diff.compare import DISAGREE, SKIPPED, classify
+from consensus_diff.compare import DISAGREE, classify
 from consensus_diff.mutate import mutate_bytes, mutate_object
 from consensus_diff.protocol import Verdict
 from consensus_diff.vectors import is_operand_stem, prepare, walk_cases
@@ -39,7 +39,17 @@ def load_known_ids(path) -> frozenset[str]:
     if not p.exists():
         return frozenset()
     data = tomllib.loads(p.read_text(encoding="utf-8"))
-    return frozenset(e["id"] for e in data.get("known", []))
+    ids = set()
+    for i, e in enumerate(data.get("known", [])):
+        # A malformed entry is a hand-edit mistake: fail loud, naming the file and
+        # the entry. Silently dropping it would stop suppressing that divergence,
+        # which then resurfaces as a spurious "finding" -- worse than a clear crash.
+        if not isinstance(e, dict) or "id" not in e:
+            raise ValueError(
+                f"{p}: malformed [[known]] entry #{i}: expected a table with an "
+                f"`id` key, got {e!r}")
+        ids.add(e["id"])
+    return frozenset(ids)
 
 
 @dataclass(frozen=True)
@@ -59,11 +69,19 @@ class Finding:
 class FuzzResult:
     """The deduplicated findings, the per-class tally (the denominator), and the
     count of distinct requests actually submitted. Iterable / truthy over
-    ``findings`` so a caller can treat it directly as the finding list."""
+    ``findings`` so a caller can treat it directly as the finding list.
+
+    ``tally`` holds *only* per-submission agreement classes, so ``sum(tally.values())``
+    is a true "iterations classified" count. Two corpus/diagnostic counts live
+    apart from it: ``unmapped`` seeds the schema cannot decode (dropped before the
+    run) and ``decode_errors`` iterations whose schema decode failed and fell back
+    to a byte flip."""
 
     findings: list[Finding]
     tally: Counter
     submitted: int = 0
+    unmapped: int = 0
+    decode_errors: int = 0
 
     def __iter__(self):
         return iter(self.findings)
@@ -85,15 +103,22 @@ def signature(f: Finding) -> tuple:
 
 
 def render_fuzz_report(findings: list[Finding], fork: str, preset: str,
-                       tally: Counter | None = None, submitted: int | None = None) -> str:
+                       tally: Counter | None = None, submitted: int | None = None,
+                       unmapped: int = 0, decode_errors: int = 0) -> str:
     """Markdown report: the per-class tally (the denominator — how many mutated
     requests were classified into what) followed by the deduplicated findings
-    grouped by kind (disagree / crash)."""
+    grouped by kind (disagree / crash). ``unmapped`` (seeds the schema can't
+    decode) and ``decode_errors`` (byte-fallback iterations) are corpus/diagnostic
+    counts, reported apart from the tally so they don't skew the classified total."""
     tally = tally if tally is not None else Counter()
     lines = [f"# consensus-diff fuzz findings — {fork} {preset}", "",
              f"- iterations classified: {sum(tally.values())}"]
     if submitted is not None:
         lines.append(f"- distinct requests submitted: {submitted}")
+    if unmapped:
+        lines.append(f"- unmapped seeds (no schema, not fuzzed): {unmapped}")
+    if decode_errors:
+        lines.append(f"- decode errors (fell back to byte flip): {decode_errors}")
     lines += [f"- distinct findings: {len(findings)}", ""]
     if tally:
         lines.append("## tally")
@@ -129,7 +154,8 @@ def _has_operand(case) -> bool:
 
 def _mutate_seed(seed, schema, rng, workdir, bytes_only):
     """Build the seed's request via the tested ``prepare`` path, mutate its
-    operations operand in place, and return ``(request, mutation_desc, mutated)``.
+    operations operand in place, and return
+    ``(request, mutation_desc, mutated, decode_failed)``.
 
     ``prepare`` decompresses every input to a raw ``.ssz`` in ``workdir`` and
     assembles the 10-field line exactly as the differential driver does, so the
@@ -146,22 +172,36 @@ def _mutate_seed(seed, schema, rng, workdir, bytes_only):
     we fall back to the byte-level flip, so the operand is still mutated.
 
     ``mutated`` is the raw operand bytes just written to disk; the caller reuses
-    them for the dedup hash rather than reading the file back.
+    them for the dedup hash rather than reading the file back. ``decode_failed`` is
+    True when the schema decode raised and we fell back to a byte flip -- the caller
+    counts it so a systemic decode/mapping problem stays visible in the report
+    rather than hiding as ordinary byte-mode iterations.
     """
     req = prepare(seed, workdir)
     operand = req.inputs[-1]
     raw = operand.read_bytes()
+    decode_failed = False
     if bytes_only or schema is None:
         mutated, desc = mutate_bytes(raw, rng), "bytes"
     else:
-        obj = schema.container_for(seed.runner, seed.handler).decode_bytes(raw)
-        mutated_obj, op = mutate_object(obj, rng)
-        if op.path:
-            mutated, desc = mutated_obj.encode_bytes(), f"{'.'.join(op.path)}={op.value}"
+        try:
+            # Guard ONLY the external decode: a corrupt/incompatible seed must not
+            # abort the session. remerkleable raises a bare `Exception` on the common
+            # bad cases (e.g. a scope/byte-length mismatch in core.py `deserialize`)
+            # with no narrower decode-error base to catch, so `except Exception` is the
+            # tightest type available. mutate_object (our code) stays in the `else`, so
+            # a bug there still crashes loudly instead of counting as a decode error.
+            obj = schema.container_for(seed.runner, seed.handler).decode_bytes(raw)
+        except Exception:  # noqa: BLE001 -- remerkleable raises bare Exception on a bad decode
+            mutated, desc, decode_failed = mutate_bytes(raw, rng), "bytes", True
         else:
-            mutated, desc = mutate_bytes(raw, rng), "bytes"  # no uint leaf: byte fallback
+            mutated_obj, op = mutate_object(obj, rng)
+            if op.path:
+                mutated, desc = mutated_obj.encode_bytes(), f"{'.'.join(op.path)}={op.value}"
+            else:
+                mutated, desc = mutate_bytes(raw, rng), "bytes"  # no uint leaf: byte fallback
     operand.write_bytes(mutated)
-    return replace(req, post=None), desc, mutated
+    return replace(req, post=None), desc, mutated, decode_failed
 
 
 def _finding_kind(agreement, verdicts) -> str | None:
@@ -209,6 +249,8 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     seen = set()
     submitted: set = set()
     findings: list[Finding] = []
+    unmapped = 0
+    decode_errors = 0
     # Nothing eligible to fuzz: bail before spawning clients. spawn_clients starts
     # subprocesses and runs handshakes, so doing it only to close them again on an
     # empty corpus is pure waste (gemini/copilot review).
@@ -216,17 +258,16 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
         return FuzzResult(findings, tally, 0)
     # Pre-filter to seeds this Schema can decode/mutate, so every one of `iterations`
     # steps lands on a fuzzable seed instead of cycling onto unmapped handlers and
-    # burning the budget on skips (gemini review). SKIPPED then counts unmapped seeds
-    # once -- a stable corpus property -- rather than per-iteration skips that scaled
-    # with `iterations`. Byte-only mode (schema is None) can fuzz every seed, so it
-    # skips the filter.
+    # burning the budget on skips (gemini review). `unmapped` records how many were
+    # dropped once -- a stable corpus property, kept out of `tally` so it never skews
+    # the classified-iterations denominator (copilot review). Byte-only mode (schema
+    # is None) can fuzz every seed, so it skips the filter.
     if schema is not None:
         n_all = len(seeds)
         seeds = [s for s in seeds if schema.knows(s.runner, s.handler)]
-        if n_all > len(seeds):
-            tally[SKIPPED] = n_all - len(seeds)
+        unmapped = n_all - len(seeds)
         if not seeds:
-            return FuzzResult(findings, tally, 0)
+            return FuzzResult(findings, tally, 0, unmapped=unmapped)
     # One per-run workdir (#12): prepare overwrites the operand each iteration, so
     # the disk footprint stays bounded to a single dir instead of 1000 mut{i}/ ones.
     # The fork/preset/pid suffix keeps concurrent fuzz runs that share one log_dir
@@ -240,7 +281,10 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
             seed = seeds[i % len(seeds)]  # every seed is mapped: pre-filtered above
             # Fresh per-iteration RNG so every mutation replays from (rng_seed, i).
             rng_i = random.Random(f"{rng_seed}:{i}")
-            req, mutation, mutated = _mutate_seed(seed, schema, rng_i, workdir, mutate_bytes_only)
+            req, mutation, mutated, decode_failed = _mutate_seed(
+                seed, schema, rng_i, workdir, mutate_bytes_only)
+            if decode_failed:
+                decode_errors += 1
             # Dedup on the mutated operand bytes: the reused workdir keeps every
             # request line identical, and cycling the corpus re-derives the same
             # single-field mutations, so identical requests must not be resubmitted.
@@ -267,7 +311,8 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
         for c in clients.values():
             c.close()
         shutil.rmtree(workdir, ignore_errors=True)
-    return FuzzResult(findings, tally, len(submitted))
+    return FuzzResult(findings, tally, len(submitted),
+                      unmapped=unmapped, decode_errors=decode_errors)
 
 
 def main(argv=None) -> int:
@@ -281,6 +326,9 @@ def main(argv=None) -> int:
     p.add_argument("--report-dir", type=Path, default=Path("reports"))
     p.add_argument("--known", type=Path, default=Path("known-divergences.toml"),
                    help="TOML of triaged known divergences to suppress (default: repo file)")
+    p.add_argument("--bytes-only", action="store_true",
+                   help="byte-level mutations only; skips the out-of-band pyspec "
+                        "(eth_consensus_specs) so the fuzzer runs without it")
     a = p.parse_args(argv)
     backends_path, vector_root, report_dir = (
         _expand(a.backends), _expand(a.vector_root), _expand(a.report_dir))
@@ -289,16 +337,18 @@ def main(argv=None) -> int:
         backends_path=backends_path, fork=a.fork, preset=a.preset,
         vector_root=vector_root, log_dir=report_dir / "logs",
         iterations=a.iterations, rng_seed=a.rng_seed, known_ids=known_ids,
+        mutate_bytes_only=a.bytes_only,
     )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = report_dir / f"{stamp}-{a.fork}-{a.preset}-fuzz.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_fuzz_report(result.findings, a.fork, a.preset,
-                                      tally=result.tally, submitted=result.submitted),
+                                      tally=result.tally, submitted=result.submitted,
+                                      unmapped=result.unmapped,
+                                      decode_errors=result.decode_errors),
                    encoding="utf-8")
-    skipped = result.tally.get(SKIPPED, 0)
     print(f"{len(result.findings)} distinct findings, {result.submitted} requests "
-          f"({skipped} unmapped seeds skipped) -> {out}")
+          f"({result.unmapped} unmapped seeds skipped) -> {out}")
     return 0
 
 

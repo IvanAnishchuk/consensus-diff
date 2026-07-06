@@ -1,6 +1,7 @@
 import random
 import sys
 import textwrap
+from collections import Counter
 from pathlib import Path
 
 import cramjam
@@ -12,6 +13,7 @@ from consensus_diff.fuzz import (
     _expand,
     _mutate_seed,
     load_known_ids,
+    main,
     render_fuzz_report,
     run_reject_fuzz,
     signature,
@@ -141,9 +143,10 @@ def test_mutate_seed_byte_fallback_for_uintless_container(tmp_path):
         bytes(cramjam.snappy.compress_raw(original)))
     seed = Case("mainnet", "gloas", "operations", "sync_aggregate", "s", "c0", case_dir)
 
-    req, desc, mutated = _mutate_seed(
+    req, desc, mutated, decode_failed = _mutate_seed(
         seed, schema, random.Random(0), tmp_path / "work", bytes_only=False)
     assert desc == "bytes"                            # sentinel path -> byte fallback
+    assert decode_failed is False                     # a clean decode, just no uint leaf
     assert mutated != original                        # operand actually mutated
     assert req.inputs[-1].read_bytes() == mutated     # and the mutated bytes were written to disk
 
@@ -232,3 +235,67 @@ def test_known_divergence_is_not_a_new_finding(tmp_path):
     result = run_reject_fuzz(**common, known_ids=frozenset({seed_id}))
     assert not result.findings
     assert result.tally.get("known", 0) >= 1
+
+
+def test_load_known_ids_rejects_malformed_entry(tmp_path):
+    # A hand-edited entry missing `id` must fail loud, not be silently dropped
+    # (a dropped known-divergence would resurface as a spurious finding).
+    p = tmp_path / "known.toml"
+    p.write_text('[[known]]\nreason = "forgot the id"\n')
+    with pytest.raises(ValueError, match="malformed"):
+        load_known_ids(p)
+
+
+def test_mutate_seed_counts_decode_failure_as_byte_fallback(tmp_path):
+    # A corrupt/incompatible seed makes schema decode raise; _mutate_seed must not
+    # abort the session -- it falls back to a byte flip and flags decode_failed so
+    # the caller can tally it (rather than swallowing the failure silently).
+    class _BoomContainer:
+        @staticmethod
+        def decode_bytes(raw):
+            raise ValueError("corrupt seed")
+
+    class _BoomSchema:
+        def container_for(self, runner, handler):
+            return _BoomContainer
+
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "pre.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"PRE")))
+    (case_dir / "attestation.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"OP")))
+    seed = Case("minimal", "gloas", "operations", "attestation", "s", "c0", case_dir)
+
+    req, desc, mutated, decode_failed = _mutate_seed(
+        seed, _BoomSchema(), random.Random(0), tmp_path / "work", bytes_only=False)
+    assert decode_failed is True                      # decode raised -> flagged
+    assert desc == "bytes"                            # and fell back to a byte flip
+    assert req.inputs[-1].read_bytes() == mutated
+
+
+def test_report_separates_unmapped_and_decode_errors_from_tally():
+    # The two corpus/diagnostic counts must NOT inflate "iterations classified"
+    # (that is sum(tally) only), and each gets its own report line.
+    tally = Counter({"agree": 5, "disagree": 2})
+    text = render_fuzz_report([], "gloas", "minimal", tally=tally, submitted=7,
+                              unmapped=3, decode_errors=1)
+    assert "iterations classified: 7" in text
+    assert "unmapped seeds (no schema, not fuzzed): 3" in text
+    assert "decode errors (fell back to byte flip): 1" in text
+
+
+def test_main_bytes_only_runs_without_schema(tmp_path):
+    # The --bytes-only CLI path must drive run_reject_fuzz in byte-only mode, so it
+    # never imports the out-of-band pyspec and still writes a report.
+    _one_attestation_seed(tmp_path)
+    backends = _boundary_backends_toml(tmp_path)
+    report_dir = tmp_path / "reports"
+    rc = main([
+        "--backends", str(backends), "--fork", "gloas", "--preset", "minimal",
+        "--vector-root", str(tmp_path), "--iterations", "3", "--rng-seed", "42",
+        "--report-dir", str(report_dir), "--known", str(tmp_path / "absent.toml"),
+        "--bytes-only",
+    ])
+    assert rc == 0
+    reports = list(report_dir.glob("*-gloas-minimal-fuzz.md"))
+    assert len(reports) == 1
+    assert "## disagree" in reports[0].read_text()  # the boundary split, found byte-only

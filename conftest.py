@@ -23,11 +23,29 @@ from consensus_diff.report import render_summary, write_census
 from consensus_diff.vectors import PINNED_TAG, Case, ensure_archive, prepare, walk_cases
 
 # The schema lane needs the out-of-band pyspec (eth_consensus_specs, see README):
-# no PyPI release carries gloas at the pinned tag, so a bare `uv sync` env lacks
-# it. Shared skip mark for those tests -- `find_spec` decides without importing
-# the heavy package. Module-level via `pytestmark`, per-test via `@requires_pyspec`.
+# no PyPI release carries gloas at the pinned tag, so a bare `uv sync` env lacks it.
+
+
+def _pyspec_available() -> bool:
+    """True iff the pyspec is installed for the fork the schema lane uses.
+
+    Check the fork submodule, not just the top package: Schema.__init__ imports
+    ``eth_consensus_specs.<fork>.<preset>``, so a stale/partial install with the
+    top package but no gloas would slip past a top-level check and fail late in
+    Schema instead of skipping cleanly (coderabbit review). ``find_spec`` on a
+    dotted name *raises* ModuleNotFoundError when the top package is absent (the
+    common "no pyspec" case) rather than returning None, so treat that as missing.
+    It decides without importing the heavy fork module.
+    """
+    try:
+        return importlib.util.find_spec("eth_consensus_specs.gloas") is not None
+    except ModuleNotFoundError:
+        return False
+
+
+# Shared skip mark: module-level via `pytestmark`, per-test via `@requires_pyspec`.
 requires_pyspec = pytest.mark.skipif(
-    importlib.util.find_spec("eth_consensus_specs") is None,
+    not _pyspec_available(),
     reason="needs the out-of-band pyspec (eth_consensus_specs); see README",
 )
 
