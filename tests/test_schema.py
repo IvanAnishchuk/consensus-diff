@@ -1,7 +1,11 @@
 import cramjam
 import pytest
 
+from conftest import requires_pyspec
 from consensus_diff.schema import Schema
+
+# Every test here builds a Schema, so the whole module needs the out-of-band pyspec.
+pytestmark = requires_pyspec
 
 # The gloas operations handlers -> the container per handler.
 # The handler keys are the vector directory names under

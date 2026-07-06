@@ -44,8 +44,9 @@ differential: mutate a valid operand, drop the post state (protocol "expect
 reject"), and count any accept/reject disagreement between backends as a
 validity-boundary finding. Local / nightly only — never in CI.
 
-Install pulls the fuzz dep group (adds `eth-remerkleable`) plus the pyspec, which
-is not on PyPI at the pinned tag and must be built out-of-band:
+`eth-remerkleable` is a base dependency, so a plain install already carries the
+mutation machinery. The one out-of-band piece is the pyspec, which is not on PyPI
+at the pinned tag and must be built by hand:
 
 ```sh
 # 1. clone the pinned spec
@@ -55,18 +56,18 @@ git clone --depth 1 --branch v1.7.0-alpha.11 \
 ( cd consensus-specs-v1.7.0-alpha.11 && uv sync && \
   uv run python -m pysetup.generate_specs --all-forks )
 # 3. install it into consensus-diff's env
-uv sync --group fuzz
+uv sync
 uv pip install ./consensus-specs-v1.7.0-alpha.11
 ```
 
 Gotcha: a bare `uv sync` uninstalls the out-of-band pyspec — re-run
-`uv pip install <clone>` after any sync, or always drive the fuzzer through
-`uv run --group fuzz …`, which preserves it.
+`uv pip install <clone>` after any sync. Without it, the schema-lane tests
+`importorskip` and report SKIPPED rather than erroring; the rest still run.
 
 Run:
 
 ```sh
-uv run --group fuzz python -m consensus_diff.fuzz --fork=gloas --preset=minimal \
+uv run python -m consensus_diff.fuzz --fork=gloas --preset=minimal \
   --vector-root=~/.cache/consensus-diff/v1.7.0-alpha.11-minimal --iterations=1000
 ```
 

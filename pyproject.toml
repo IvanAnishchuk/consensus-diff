@@ -4,16 +4,16 @@ version = "0.1.0"
 description = "Differential conformance harness: N consensus-client backends judged over consensus-spec-tests through one wire protocol"
 requires-python = ">=3.12"
 license = "CC0-1.0 OR Apache-2.0 OR WTFPL"
-dependencies = ["cramjam>=2.8", "pyyaml>=6"]
+# eth-remerkleable ships the `remerkleable` type machinery the pyspec is built
+# on; pin it to the consensus-specs tag so the container types stay reproducible.
+# The pyspec itself (eth-consensus-specs, import `eth_consensus_specs`) is NOT a
+# dependency here: no PyPI release carries gloas at v1.7.0-alpha.11, so it is
+# built and installed out-of-band from that tag (see README). Tests that need it
+# `importorskip` it, so a bare `uv sync` env still runs the rest green.
+dependencies = ["cramjam>=2.8", "pyyaml>=6", "eth-remerkleable==0.1.31"]
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-xdist>=3.5", "ruff>=0.4"]
-# SSZ mutation fuzzer (M2 Phase 1). eth-remerkleable ships the `remerkleable`
-# type machinery the pyspec is built on; pin it to the pinned consensus-specs
-# tag so the container types are reproducible. The pyspec itself
-# (eth-consensus-specs, import `eth_consensus_specs`) is installed out-of-band
-# from that tag — no PyPI release carries gloas at v1.7.0-alpha.11.
-fuzz = ["eth-remerkleable==0.1.31"]
 
 [tool.ruff]
 line-length = 100

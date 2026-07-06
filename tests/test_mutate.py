@@ -1,9 +1,11 @@
 import random
 
+from conftest import requires_pyspec
 from consensus_diff.mutate import mutate_bytes, mutate_object
 from consensus_diff.schema import Schema
 
 
+@requires_pyspec
 def test_mutation_is_deterministic_and_changes_root():
     schema = Schema(fork="gloas", preset="mainnet")
     obj = schema.container_for("operations", "attestation")()

@@ -6,6 +6,7 @@ from pathlib import Path
 import cramjam
 import pytest
 
+from conftest import requires_pyspec
 from consensus_diff.fuzz import (
     Finding,
     _expand,
@@ -125,6 +126,7 @@ def test_render_report_lists_findings_by_signature():
     assert "etheorem=pass/reject" in text  # the classifier's reason, not a re-derived shape
 
 
+@requires_pyspec
 def test_mutate_seed_byte_fallback_for_uintless_container(tmp_path):
     # A container with no uint leaf (sync_aggregate) can't take a schema-path
     # mutation; _mutate_seed must fall back to the byte-level flip so it changes.

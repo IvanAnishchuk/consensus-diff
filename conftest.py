@@ -10,6 +10,7 @@ collapse should abort a sweep, not fabricate per-case verdicts.
 """
 
 import datetime
+import importlib.util
 import os
 import tomllib
 from pathlib import Path
@@ -20,6 +21,15 @@ from consensus_diff.backends import BackendSpec, ServerClient
 from consensus_diff.compare import classify
 from consensus_diff.report import render_summary, write_census
 from consensus_diff.vectors import PINNED_TAG, Case, ensure_archive, prepare, walk_cases
+
+# The schema lane needs the out-of-band pyspec (eth_consensus_specs, see README):
+# no PyPI release carries gloas at the pinned tag, so a bare `uv sync` env lacks
+# it. Shared skip mark for those tests -- `find_spec` decides without importing
+# the heavy package. Module-level via `pytestmark`, per-test via `@requires_pyspec`.
+requires_pyspec = pytest.mark.skipif(
+    importlib.util.find_spec("eth_consensus_specs") is None,
+    reason="needs the out-of-band pyspec (eth_consensus_specs); see README",
+)
 
 _census_records: list[dict] = []  # populated on the xdist controller (workers' copies unused)
 

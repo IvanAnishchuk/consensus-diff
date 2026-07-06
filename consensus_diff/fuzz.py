@@ -188,9 +188,10 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     accept/reject disagreements (and one-sided crashes).
 
     The schema (pyspec-aware) lane is used unless ``mutate_bytes_only`` — then
-    only the byte-flip complement runs, so no pyspec/eth-remerkleable object
-    model is needed. Deterministic in ``rng_seed``. ``known_ids`` reclassifies a
-    triaged divergence as ``KNOWN`` (counted, not a fresh finding).
+    only the byte-flip complement runs, so the out-of-band pyspec
+    (``eth_consensus_specs``) is never imported. ``eth-remerkleable`` is a base
+    dependency and is always present. Deterministic in ``rng_seed``. ``known_ids``
+    reclassifies a triaged divergence as ``KNOWN`` (counted, not a fresh finding).
     """
     vector_root = _expand(vector_root)
     specs = [s for s in BackendSpec.load_all(backends_path)
