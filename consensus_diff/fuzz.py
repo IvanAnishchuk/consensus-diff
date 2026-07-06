@@ -7,7 +7,9 @@ the backends is a validity-boundary finding. Local / nightly only; never in CI.
 
 import argparse
 import hashlib
+import os
 import random
+import shutil
 import tomllib
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -127,7 +129,7 @@ def _has_operand(case) -> bool:
 
 def _mutate_seed(seed, schema, rng, workdir, bytes_only):
     """Build the seed's request via the tested ``prepare`` path, mutate its
-    operations operand in place, and return ``(request, mutation_desc)``.
+    operations operand in place, and return ``(request, mutation_desc, mutated)``.
 
     ``prepare`` decompresses every input to a raw ``.ssz`` in ``workdir`` and
     assembles the 10-field line exactly as the differential driver does, so the
@@ -142,6 +144,9 @@ def _mutate_seed(seed, schema, rng, workdir, bytes_only):
     container has no mutable uint leaf (sync_aggregate, consolidation_request,
     builder_exit_request), the schema mutator returns its empty-path sentinel and
     we fall back to the byte-level flip, so the operand is still mutated.
+
+    ``mutated`` is the raw operand bytes just written to disk; the caller reuses
+    them for the dedup hash rather than reading the file back.
     """
     req = prepare(seed, workdir)
     operand = req.inputs[-1]
@@ -156,7 +161,7 @@ def _mutate_seed(seed, schema, rng, workdir, bytes_only):
         else:
             mutated, desc = mutate_bytes(raw, rng), "bytes"  # no uint leaf: byte fallback
     operand.write_bytes(mutated)
-    return replace(req, post=None), desc
+    return replace(req, post=None), desc, mutated
 
 
 def _finding_kind(agreement, verdicts) -> str | None:
@@ -203,9 +208,11 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     seen = set()
     submitted: set = set()
     findings: list[Finding] = []
-    # One reused workdir (#12): prepare overwrites the operand each iteration, so
-    # the disk footprint stays bounded instead of leaving 1000 mut{i}/ dirs.
-    workdir = Path(log_dir) / "mut"
+    # One per-run workdir (#12): prepare overwrites the operand each iteration, so
+    # the disk footprint stays bounded to a single dir instead of 1000 mut{i}/ ones.
+    # The fork/preset/pid suffix keeps concurrent fuzz runs that share one log_dir
+    # from corrupting each other's operand file, and the finally below removes it.
+    workdir = Path(log_dir) / f"mut_{fork}_{preset}_{os.getpid()}"
     # spawn_clients closes any partially-spawned client if a later spawn raises;
     # the try/finally then closes them all even if Schema/iteration below raises.
     clients = spawn_clients(specs, fork, preset, log_dir)
@@ -219,11 +226,11 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
                 continue
             # Fresh per-iteration RNG so every mutation replays from (rng_seed, i).
             rng_i = random.Random(f"{rng_seed}:{i}")
-            req, mutation = _mutate_seed(seed, schema, rng_i, workdir, mutate_bytes_only)
+            req, mutation, mutated = _mutate_seed(seed, schema, rng_i, workdir, mutate_bytes_only)
             # Dedup on the mutated operand bytes: the reused workdir keeps every
             # request line identical, and cycling the corpus re-derives the same
             # single-field mutations, so identical requests must not be resubmitted.
-            key = (seed.id, hashlib.sha256(req.inputs[-1].read_bytes()).digest())
+            key = (seed.id, hashlib.sha256(mutated).digest())
             if key in submitted:
                 continue
             submitted.add(key)
@@ -245,6 +252,7 @@ def run_reject_fuzz(*, backends_path, fork, preset, vector_root, log_dir,
     finally:
         for c in clients.values():
             c.close()
+        shutil.rmtree(workdir, ignore_errors=True)
     return FuzzResult(findings, tally, len(submitted))
 
 
@@ -272,7 +280,8 @@ def main(argv=None) -> int:
     out = report_dir / f"{stamp}-{a.fork}-{a.preset}-fuzz.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_fuzz_report(result.findings, a.fork, a.preset,
-                                      tally=result.tally, submitted=result.submitted))
+                                      tally=result.tally, submitted=result.submitted),
+                   encoding="utf-8")
     skipped = result.tally.get(SKIPPED, 0)
     print(f"{len(result.findings)} distinct findings, {result.submitted} requests "
           f"({skipped} unmapped seeds skipped) -> {out}")

@@ -205,10 +205,19 @@ def spawn_clients(
     built are closed before the exception re-propagates, so a partial failure
     never leaks a live backend process. ``BaseException`` so a ``KeyboardInterrupt``
     mid-spawn also cleans up.
+
+    A duplicate ``spec.name`` is rejected up front: the name is the dict key and
+    the backend's identity, so overwriting it would silently orphan the earlier
+    client's process. ``load_all`` can't produce a duplicate (TOML keys are
+    unique), but this function takes an arbitrary ``list[BackendSpec]``, so it
+    guards the invariant itself. The raise fires before the second spawn, and the
+    ``except`` below closes the already-built clients — no leak.
     """
     clients: dict[str, ServerClient] = {}
     try:
         for spec in specs:
+            if spec.name in clients:
+                raise ValueError(f"duplicate backend name: {spec.name}")
             clients[spec.name] = ServerClient(spec, fork, preset, log_dir)
     except BaseException:
         for client in clients.values():

@@ -49,16 +49,18 @@ def _leaf_uint_paths(obj, prefix: tuple[str, ...] = ()):
 def _edge_value(leaf: uint) -> uint:
     """An edge value for a uint leaf, guaranteed to differ from ``leaf``.
 
-    Prefer the type's in-range maximum — the all-ones value for the width, which
-    remerkleable exposes as ``_max_val``. remerkleable *rejects* anything above
-    ``_max_val``, so this is not an over-range value but the largest the leaf can
-    legally hold; it is still frequently semantically invalid (a far-future
-    slot/epoch, an oversized count) — exactly the validity edge the reject-class
-    fuzzer probes. Fall back to 0 only when the leaf already sits at that maximum,
-    so the mutation always changes the root.
+    Prefer the type's in-range maximum — the all-ones value for the width,
+    derived from the public ``type_byte_length()`` as ``2**(8*width) - 1`` rather
+    than the internal ``_max_val`` attribute (which a dependency bump could
+    rename/drop, breaking typed mutations with ``AttributeError``). remerkleable
+    *rejects* anything above that bound, so this is not an over-range value but
+    the largest the leaf can legally hold; it is still frequently semantically
+    invalid (a far-future slot/epoch, an oversized count) — exactly the validity
+    edge the reject-class fuzzer probes. Fall back to 0 only when the leaf already
+    sits at that maximum, so the mutation always changes the root.
     """
     leaf_type = type(leaf)
-    top = leaf_type._max_val
+    top = (1 << (leaf_type.type_byte_length() * 8)) - 1
     return leaf_type(0 if int(leaf) == top else top)
 
 

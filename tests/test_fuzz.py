@@ -96,28 +96,8 @@ def test_signature_groups_same_shape_different_field():
 
 
 def test_reject_fuzz_finds_boundary_divergence(tmp_path):
-    # One operations/attestation seed in a throwaway vector root (adapt layout to walk_cases).
-    case = tmp_path / "tests" / "minimal" / "gloas" / "operations" / "attestation" / "s" / "c1"
-    case.mkdir(parents=True)
-    (case / "pre.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"PRE")))
-    (case / "attestation.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"OP")))
-
-    backends = tmp_path / "backends.toml"
-    backends.write_text(textwrap.dedent(f"""
-        [backends.etheorem]
-        cmd = ["{sys.executable}", "{FAKE}"]
-        env = {{ FAKE_MODE = "reject-boundary" }}
-        forks = ["gloas"]
-        presets = ["minimal"]
-        handshake_grace = 0.3
-
-        [backends.moonglass]
-        cmd = ["{sys.executable}", "{FAKE}"]
-        env = {{ FAKE_MODE = "reject-boundary", FAKE_ACCEPTS = "1" }}
-        forks = ["gloas"]
-        presets = ["minimal"]
-        handshake_grace = 0.3
-    """))
+    _one_attestation_seed(tmp_path)
+    backends = _boundary_backends_toml(tmp_path)
 
     findings = run_reject_fuzz(
         backends_path=backends, fork="gloas", preset="minimal",
@@ -159,16 +139,15 @@ def test_mutate_seed_byte_fallback_for_uintless_container(tmp_path):
         bytes(cramjam.snappy.compress_raw(original)))
     seed = Case("mainnet", "gloas", "operations", "sync_aggregate", "s", "c0", case_dir)
 
-    req, desc = _mutate_seed(seed, schema, random.Random(0), tmp_path / "work", bytes_only=False)
+    req, desc, mutated = _mutate_seed(
+        seed, schema, random.Random(0), tmp_path / "work", bytes_only=False)
     assert desc == "bytes"                            # sentinel path -> byte fallback
-    assert req.inputs[-1].read_bytes() != original    # operand actually mutated
+    assert mutated != original                        # operand actually mutated
+    assert req.inputs[-1].read_bytes() == mutated     # and the mutated bytes were written to disk
 
 
 def test_asymmetric_crash_is_a_crash_finding_and_report_shows_tally(tmp_path):
-    case = tmp_path / "tests" / "minimal" / "gloas" / "operations" / "attestation" / "s" / "c1"
-    case.mkdir(parents=True)
-    (case / "pre.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"PRE")))
-    (case / "attestation.ssz_snappy").write_bytes(bytes(cramjam.snappy.compress_raw(b"OP")))
+    _one_attestation_seed(tmp_path)
     backends = tmp_path / "backends.toml"
     backends.write_text(textwrap.dedent(f"""
         [backends.healthy]
@@ -233,9 +212,8 @@ def test_repeated_request_is_not_submitted_twice(tmp_path):
     expected = {mutate_bytes(b"OP", random.Random(f"1:{i}")) for i in range(iterations)}
     assert result.submitted == len(expected)
     assert result.submitted < iterations
-    # #12: a single reused workdir, not one dir per iteration.
-    assert (tmp_path / "logs" / "mut").is_dir()
-    assert not list((tmp_path / "logs").glob("mut[0-9]*"))
+    # #12: the per-run workdir is removed in finally, so no mut* dir is leaked.
+    assert not list((tmp_path / "logs").glob("mut*"))
 
 
 def test_known_divergence_is_not_a_new_finding(tmp_path):
