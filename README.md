@@ -61,8 +61,8 @@ uv pip install ./consensus-specs-v1.7.0-alpha.11
 ```
 
 Gotcha: a bare `uv sync` uninstalls the out-of-band pyspec — re-run
-`uv pip install <clone>` after any sync. Without it, the schema-lane tests
-`importorskip` and report SKIPPED rather than erroring; the rest still run.
+`uv pip install <clone>` after any sync. Without it, the schema-lane tests are
+skipped (a shared `requires_pyspec` marker) rather than erroring; the rest run.
 
 Run:
 

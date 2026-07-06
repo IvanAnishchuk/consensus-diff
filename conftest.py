@@ -33,13 +33,14 @@ def _pyspec_available() -> bool:
     imports, not just the top package or fork: a stale/partial install missing that
     module would slip past a shallower check and fail late in Schema instead of
     skipping cleanly (coderabbit / copilot review). ``find_spec`` on a dotted name
-    *raises* when an intermediate package is absent (the common "no pyspec" case)
-    rather than returning None, so treat any ImportError -- ModuleNotFoundError, or
-    a broken package whose import raises something else -- as missing.
+    imports the intermediate packages to resolve it, so treat ANY import-time
+    failure as "pyspec unavailable" and skip: a missing package/preset raises
+    ModuleNotFoundError, but a broken install can raise other things, and a
+    test-gating check should skip the lane rather than crash pytest collection.
     """
     try:
         return importlib.util.find_spec("eth_consensus_specs.gloas.mainnet") is not None
-    except ImportError:
+    except Exception:  # noqa: BLE001 -- any import failure of the optional pyspec = skip
         return False
 
 

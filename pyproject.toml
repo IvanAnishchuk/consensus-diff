@@ -9,7 +9,8 @@ license = "CC0-1.0 OR Apache-2.0 OR WTFPL"
 # The pyspec itself (eth-consensus-specs, import `eth_consensus_specs`) is NOT a
 # dependency here: no PyPI release carries gloas at v1.7.0-alpha.11, so it is
 # built and installed out-of-band from that tag (see README). Tests that need it
-# `importorskip` it, so a bare `uv sync` env still runs the rest green.
+# are skipped via a shared `requires_pyspec` marker when it's absent, so a bare
+# `uv sync` env still runs the rest green.
 dependencies = ["cramjam>=2.8", "pyyaml>=6", "eth-remerkleable==0.1.31"]
 
 [dependency-groups]
