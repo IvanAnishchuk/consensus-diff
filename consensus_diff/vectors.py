@@ -134,6 +134,14 @@ def walk_cases(
 # exclude loudly (count mismatch) than guess an order for.
 _BLOCKS_RE = re.compile(r"^blocks_(\d+)$")
 
+
+def is_operand_stem(stem: str) -> bool:
+    """True iff a case-file stem is an operations operand: not ``pre``/``post`` and
+    not a ``blocks_N`` block. Shared by ``prepare`` (which appends the operand) and
+    the fuzzer's ``_has_operand`` so the two can't drift on what counts as one — in
+    particular both treat a non-numeric ``blocks_*`` stem the same way."""
+    return stem not in ("pre", "post") and not _BLOCKS_RE.match(stem)
+
 _REWARDS_ORDER = ("source_deltas", "target_deltas", "head_deltas", "inactivity_penalty_deltas")
 
 _FC_CHECK_SUBKEYS = {
@@ -285,8 +293,7 @@ def prepare(case: Case, workdir: Path):
     inputs = [_decompress(case, stem, workdir) for _, stem in blocks]
 
     if case.runner == "operations":
-        operands = [s for s in snappy_stems
-                    if s not in ("pre", "post") and not _BLOCKS_RE.match(s)]
+        operands = [s for s in snappy_stems if is_operand_stem(s)]
         if operands:
             inputs.append(_decompress(case, operands[0], workdir))
 

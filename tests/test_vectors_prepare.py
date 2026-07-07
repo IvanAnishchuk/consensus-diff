@@ -5,7 +5,16 @@ import pytest
 import yaml
 
 from consensus_diff.protocol import ForkChoiceRequest, GenericRequest, SszStaticRequest
-from consensus_diff.vectors import Case, build_fc_script, prepare
+from consensus_diff.vectors import Case, build_fc_script, is_operand_stem, prepare
+
+
+def test_is_operand_stem_shared_predicate():
+    assert is_operand_stem("attestation")
+    assert is_operand_stem("blocks_x")     # non-numeric -> not a block -> operand
+    assert not is_operand_stem("pre")
+    assert not is_operand_stem("post")
+    assert not is_operand_stem("blocks_0")
+    assert not is_operand_stem("blocks_10")
 
 
 def put_snappy(case_dir: Path, stem: str, payload: bytes) -> None:

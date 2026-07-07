@@ -17,6 +17,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "cramjam" },
+    { name = "eth-remerkleable" },
     { name = "pyyaml" },
 ]
 
@@ -30,6 +31,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cramjam", specifier = ">=2.8" },
+    { name = "eth-remerkleable", specifier = "==0.1.31" },
     { name = "pyyaml", specifier = ">=6" },
 ]
 
@@ -106,6 +108,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4b/85/3be6f0a1398f976070672be64f61895f8839857618a2d8cc0d3ab529d3dc/cramjam-2.11.0-cp314-cp314t-musllinux_1_1_x86_64.whl", hash = "sha256:d388bd5723732c3afe1dd1d181e4213cc4e1be210b080572e7d5749f6e955656", size = 2160229, upload-time = "2025-07-27T21:24:06.729Z" },
     { url = "https://files.pythonhosted.org/packages/57/5e/66cfc3635511b20014bbb3f2ecf0095efb3049e9e96a4a9e478e4f3d7b78/cramjam-2.11.0-cp314-cp314t-win32.whl", hash = "sha256:0a70ff17f8e1d13f322df616505550f0f4c39eda62290acb56f069d4857037c8", size = 1610267, upload-time = "2025-07-27T21:24:08.428Z" },
     { url = "https://files.pythonhosted.org/packages/ce/c6/c71e82e041c95ffe6a92ac707785500aa2a515a4339c2c7dd67e3c449249/cramjam-2.11.0-cp314-cp314t-win_amd64.whl", hash = "sha256:028400d699442d40dbda02f74158c73d05cb76587a12490d0bfedd958fd49188", size = 1713108, upload-time = "2025-07-27T21:24:10.147Z" },
+]
+
+[[package]]
+name = "eth-remerkleable"
+version = "0.1.31"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/51/ac/40fde655f67fd02f07b28e3fe4b9bb4af521388ca8aa48462d622ce4fa03/eth_remerkleable-0.1.31.tar.gz", hash = "sha256:94df4b18a50dfc46f55b2e790cfece384e64032e9cb82d185cff09224682ad1d", size = 49525, upload-time = "2026-06-11T13:23:38.552Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/a1/87f7c996f344c5f213c2bca657e579c3696bb99737238c0cf9f04867386a/eth_remerkleable-0.1.31-py3-none-any.whl", hash = "sha256:7e48ea1b80935977effc02300f3f9b1db19153ab87ffbcea14a6e6429bbdc56b", size = 57192, upload-time = "2026-06-11T13:23:37.208Z" },
 ]
 
 [[package]]

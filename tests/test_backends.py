@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from consensus_diff.backends import BackendSpec, HandshakeError, ServerClient
+from consensus_diff import backends as backends_mod
+from consensus_diff.backends import BackendSpec, HandshakeError, ServerClient, spawn_clients
 from consensus_diff.protocol import Verdict
 
 FAKE = Path(__file__).parent / "fake_backend.py"
@@ -147,6 +148,43 @@ def test_slow_startup_failure_is_caught_within_grace(tmp_path):
     s = spec("slow-badargv", handshake_grace=2.0)
     with pytest.raises(HandshakeError):
         ServerClient(s, fork="gloas", preset="minimal", log_dir=tmp_path)
+
+
+def test_spawn_clients_closes_partial_on_handshake_failure(tmp_path, monkeypatch):
+    # The second backend fails its handshake; the first (already spawned and
+    # healthy) must be closed, leaving no orphaned process.
+    created: list[ServerClient] = []
+
+    class Recording(ServerClient):
+        def __init__(self, *args, **kwargs):
+            created.append(self)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(backends_mod, "ServerClient", Recording)
+    good = spec("ok", handshake_grace=0.3)
+    bad = spec("badargv", handshake_grace=2.0)
+    with pytest.raises(HandshakeError):
+        spawn_clients([good, bad], "gloas", "minimal", tmp_path / "logs")
+    assert created, "the first (good) client should have been constructed"
+    assert created[0]._proc is None and created[0]._closed  # closed, no leak
+
+
+def test_spawn_clients_rejects_duplicate_names(tmp_path, monkeypatch):
+    # Two specs share a name: the dup is rejected before it spawns, and the first
+    # (already spawned) client is closed, so a duplicate name never orphans a process.
+    created: list[ServerClient] = []
+
+    class Recording(ServerClient):
+        def __init__(self, *args, **kwargs):
+            created.append(self)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(backends_mod, "ServerClient", Recording)
+    dup = spec("ok")
+    with pytest.raises(ValueError, match="duplicate backend name"):
+        spawn_clients([dup, dup], "gloas", "minimal", tmp_path / "logs")
+    assert len(created) == 1  # the dup was rejected before a second spawn
+    assert created[0]._proc is None and created[0]._closed  # first closed, no leak
 
 
 def test_short_grace_would_miss_the_slow_failure(tmp_path):

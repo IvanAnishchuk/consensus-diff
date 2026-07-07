@@ -10,6 +10,7 @@ collapse should abort a sweep, not fabricate per-case verdicts.
 """
 
 import datetime
+import importlib.util
 import os
 import tomllib
 from pathlib import Path
@@ -20,6 +21,34 @@ from consensus_diff.backends import BackendSpec, ServerClient
 from consensus_diff.compare import classify
 from consensus_diff.report import render_summary, write_census
 from consensus_diff.vectors import PINNED_TAG, Case, ensure_archive, prepare, walk_cases
+
+# The schema lane needs the out-of-band pyspec (eth_consensus_specs, see README):
+# no PyPI release carries gloas at the pinned tag, so a bare `uv sync` env lacks it.
+
+
+def _pyspec_available() -> bool:
+    """True iff the pyspec is installed for the fork/preset the schema lane uses.
+
+    Check the exact ``eth_consensus_specs.gloas.mainnet`` module Schema.__init__
+    imports, not just the top package or fork: a stale/partial install missing that
+    module would slip past a shallower check and fail late in Schema instead of
+    skipping cleanly (coderabbit / copilot review). ``find_spec`` on a dotted name
+    imports the intermediate packages to resolve it, so treat ANY import-time
+    failure as "pyspec unavailable" and skip: a missing package/preset raises
+    ModuleNotFoundError, but a broken install can raise other things, and a
+    test-gating check should skip the lane rather than crash pytest collection.
+    """
+    try:
+        return importlib.util.find_spec("eth_consensus_specs.gloas.mainnet") is not None
+    except Exception:  # noqa: BLE001 -- any import failure of the optional pyspec = skip
+        return False
+
+
+# Shared skip mark: module-level via `pytestmark`, per-test via `@requires_pyspec`.
+requires_pyspec = pytest.mark.skipif(
+    not _pyspec_available(),
+    reason="needs the out-of-band pyspec (eth_consensus_specs); see README",
+)
 
 _census_records: list[dict] = []  # populated on the xdist controller (workers' copies unused)
 
